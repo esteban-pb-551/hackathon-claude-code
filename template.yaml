@@ -1,0 +1,120 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Semantic search application - Etapa 1
+  S3 upload -> EventBridge -> CheckS3Vectors -> EmbedS3Vectors (Rust)
+
+Parameters:
+  VectorBucketName:
+    Type: String
+    Description: Name of the pre-created S3 Vectors bucket
+
+  VoyageApiKey:
+    Type: String
+    NoEcho: true
+    Description: API key for Voyage embeddings service
+
+  FriendliToken:
+    Type: String
+    NoEcho: true
+    Description: Token for Friendli inference service (Etapa 2)
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: python3.12
+
+Resources:
+  # ---------- S3 Upload Bucket ----------
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+
+  # ---------- CheckS3Vectors Lambda ----------
+  CheckS3VectorsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-check-s3-vectors"
+      Runtime: python3.12
+      Handler: check_s3_vectors.handler
+      CodeUri: lambdas/check-s3-vectors/
+      Timeout: 120
+      Environment:
+        Variables:
+          VECTOR_BUCKET_NAME: !Ref VectorBucketName
+          EMBED_FUNCTION_NAME: !Ref EmbedS3VectorsFunction
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3vectors:GetIndex
+                - s3vectors:CreateIndex
+              Resource: "*"
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: !GetAtt EmbedS3VectorsFunction.Arn
+      Events:
+        S3ObjectCreated:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - aws.s3
+              detail-type:
+                - "Object Created"
+              detail:
+                bucket:
+                  name:
+                    - !Ref UploadBucket
+                object:
+                  key:
+                    - suffix: ".txt"
+
+  # ---------- EmbedS3Vectors Lambda (Rust) ----------
+  EmbedS3VectorsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-embed-s3-vectors"
+      Runtime: provided.al2023
+      Handler: bootstrap
+      CodeUri: lambdas/embed-s3-vectors/
+      Timeout: 300
+      MemorySize: 512
+      Architectures:
+        - arm64
+      Environment:
+        Variables:
+          VECTOR_BUCKET_NAME: !Ref VectorBucketName
+          VOYAGE_API_KEY: !Ref VoyageApiKey
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "${UploadBucket.Arn}/*"
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3vectors:PutVectors
+              Resource: "*"
+
+Outputs:
+  UploadBucketName:
+    Description: Name of the S3 upload bucket
+    Value: !Ref UploadBucket
+
+  CheckS3VectorsFunctionArn:
+    Description: ARN of the CheckS3Vectors Lambda
+    Value: !GetAtt CheckS3VectorsFunction.Arn
+
+  EmbedS3VectorsFunctionArn:
+    Description: ARN of the EmbedS3Vectors Lambda
+    Value: !GetAtt EmbedS3VectorsFunction.Arn
