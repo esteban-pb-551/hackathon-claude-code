@@ -148,9 +148,24 @@ All three Lambda functions run on arm64 (Graviton). API keys are stored in AWS S
 
 ## Frontend
 
-A static search UI is available at `frontend/index.html`. Open it directly in your browser -- no build step or server required. It provides a form to enter an index name, query, and optional filter, and displays the LLM-generated response.
+A single-page search UI built with Vue 3 (Composition API) is available at `frontend/index.html`. It includes:
 
-Before using it, update the API endpoint URL in the file to match your deployed `SearchApiUrl`.
+- **Theme toggle:** Switch between dark and light modes (persisted in localStorage)
+- **Search form:** Index name, query, and optional filter fields
+- **Loading state:** Progress indicator with elapsed time counter
+- **Response display:** Success and error states with request metadata
+
+### Running the frontend
+
+Open `frontend/index.html` directly in your browser -- no build step or server required. The page loads Vue 3 via CDN (ES module import map) and posts directly to the API Gateway endpoint.
+
+Before using it, update the `API_URL` constant in the `<script>` section at the bottom of the file to match your deployed `SearchApiUrl`:
+
+```javascript
+const API_URL = 'https://<your-api-id>.execute-api.us-east-1.amazonaws.com/search'
+```
+
+The API returns CORS headers (`access-control-allow-origin: *`), so the frontend works from `file://` or any static host.
 
 ## Test Scripts
 
