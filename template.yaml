@@ -143,6 +143,52 @@ Resources:
                 - !GetAtt VectorsBucket.VectorBucketArn
                 - !Sub "${VectorsBucket.VectorBucketArn}/*"
 
+  # ---------- SearchS3Vectors Lambda (Rust) ----------
+  SearchS3VectorsFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      Runtime: provided.al2023
+      Handler: bootstrap
+      CodeUri: lambdas/search-s3-vectors/
+      Timeout: 300
+      MemorySize: 512
+      Architectures:
+        - arm64
+      Environment:
+        Variables:
+          VECTOR_BUCKET_NAME: !Select [1, !Split ["/", !GetAtt VectorsBucket.VectorBucketArn]]
+          VOYAGE_SECRET_ARN: !Ref VoyageApiKeySecret
+          FRIENDLI_SECRET_ARN: !Ref FriendliTokenSecret
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource:
+                - !Ref VoyageApiKeySecret
+                - !Ref FriendliTokenSecret
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3vectors:GetIndex
+                - s3vectors:QueryVectors
+              Resource:
+                - !GetAtt VectorsBucket.VectorBucketArn
+                - !Sub "${VectorsBucket.VectorBucketArn}/*"
+      Events:
+        SearchApi:
+          Type: HttpApi
+          Properties:
+            Path: /search
+            Method: POST
+            ApiId: !Ref SearchHttpApi
+
+  # ---------- Search HTTP API ----------
+  SearchHttpApi:
+    Type: AWS::Serverless::HttpApi
+
 Outputs:
   VectorsBucketName:
     Description: Name of the S3 Vectors bucket (managed by stack)
@@ -163,3 +209,11 @@ Outputs:
   EmbedS3VectorsFunctionArn:
     Description: ARN of the EmbedS3Vectors Lambda
     Value: !GetAtt EmbedS3VectorsFunction.Arn
+
+  SearchApiUrl:
+    Description: URL of the Search HTTP API endpoint
+    Value: !Sub "https://${SearchHttpApi}.execute-api.${AWS::Region}.amazonaws.com/search"
+
+  SearchS3VectorsFunctionArn:
+    Description: ARN of the SearchS3Vectors Lambda
+    Value: !GetAtt SearchS3VectorsFunction.Arn
