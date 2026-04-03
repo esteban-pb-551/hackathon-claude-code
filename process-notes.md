@@ -40,3 +40,13 @@
 - **Reference files:** `files/use_voyage.rs` and `files/chunk_example.rs` were critical — they provided exact API usage patterns for S3 Vectors, VoyageAI embedding, and text chunking that went directly into the spec.
 
 ## /checklist
+- **Sequencing decisions:** Learner proposed SAM template → CheckS3Vectors → EmbedS3Vectors for Etapa 1, which is the correct dependency order (infra before code, orchestrator before worker). Agent extended with Etapa 2 (SAM extension → SearchS3Vectors), Etapa 3 stretch (frontend), and cierre (README + Devpost). Learner confirmed without changes.
+- **Build mode:** Autonomous. Learner chose immediately — consistent with decisive pattern across all phases.
+- **Verification:** Yes, checkpoints every 3-4 items. Learner agreed to recommended cadence.
+- **Comprehension checks:** N/A (autonomous mode).
+- **Git cadence:** Commit after each checklist item.
+- **Check-in cadence:** N/A (autonomous mode).
+- **Item count:** 11 items. 4 for Etapa 1 (including deploy+test), 3 for Etapa 2 (including deploy+test), 2 for Etapa 3 stretch (including deploy+test), 2 for cierre (README + Devpost). Estimated total: 4-6 hours depending on deploy/debug time.
+- **Submission planning:** Learner deferred Devpost details to after all three etapas are built. Wow moment identified as the live demo flow (upload .txt → search by meaning → LLM response). GitHub repo status not discussed — to be resolved at submission time.
+- **Deepening rounds:** 0 rounds. Learner chose to proceed directly. Consistent pattern across all four planning phases (/scope, /prd, /spec, /checklist).
+- **Active shaping:** Moderate. Learner drove the Etapa 1 sequencing (3 items in correct dependency order). Accepted agent's proposed extension for Etapa 2, stretch, and cierre without modification. Less hands-on than in earlier phases, which is expected — the heavy architectural decisions were already made in /scope, /prd, and /spec.
