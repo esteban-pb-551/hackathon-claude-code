@@ -58,13 +58,13 @@
 
 ### Etapa 3 — Frontend (Stretch)
 
-- [ ] **8. Search frontend web page**
+- [x] **8. Search frontend web page**
   Spec ref: `prd.md > Search Frontend`
   What to build: Create a static HTML page with professional, clean design. Form with three fields: index name (required), query (required), filter (optional). On submit, POST to API Gateway `/search` endpoint. Display LLM response on screen. Handle and display error messages (index not found, no results). Include a loading indicator for the potentially long response time.
   Acceptance: Form submits to API Gateway and displays the response. Error messages display appropriately. Design is clean and professional.
   Verify: Open the page in a browser. Submit a search query and confirm the response appears. Test with an invalid index name and confirm the error displays.
 
-- [ ] **9. Deploy and test frontend**
+- [x] **9. Deploy and test frontend**
   Spec ref: `prd.md > Search Frontend`, `prd.md > Infrastructure & Deployment`
   What to build: Add the frontend to the SAM template or deploy separately (S3 static hosting, or simply serve locally for demo). Test the full flow: upload a file → search from the frontend → see LLM response.
   Acceptance: Frontend is accessible and the full demo flow works end-to-end.
@@ -72,7 +72,7 @@
 
 ### Cierre
 
-- [ ] **10. README with deployment instructions**
+- [x] **10. README with deployment instructions**
   Spec ref: `spec.md > File Structure`, `prd.md > Infrastructure & Deployment`
   What to build: Write `README.md` with complete step-by-step deployment instructions using SAM. Cover: prerequisites (Cargo Lambda, SAM CLI, AWS credentials, API keys), environment variable setup, `sam build && sam deploy`, how to upload a test file, how to run a search query. No project tree per prd.md requirement.
   Acceptance: A developer can follow the README from zero and deploy the full stack. All required environment variables and steps are documented.
