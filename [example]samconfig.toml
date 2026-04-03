@@ -1,0 +1,16 @@
+version = 0.1
+
+[default.global.parameters]
+stack_name = "s3-vectors-search"
+region = "{aws-region}"
+
+[default.build.parameters]
+cached = true # Enable build caching to speed up subsequent builds
+parallel = true # Enable parallel builds to speed up the build process by building multiple functions simultaneously
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM" # Required to allow SAM to create IAM roles and policies for your Lambda functions
+confirm_changeset = false # Disable confirmation of changesets to allow for automated deployments without manual intervention
+resolve_s3 = true # Enable automatic resolution of S3 bucket names for deployment artifacts
+parameter_overrides = "VoyageApiKey=\"pa-xxxxxxx\" FriendliToken=\"flp_xxxxx\""
+tags = "application=\"s3-vectors-search\" environment=\"development\""
