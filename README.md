@@ -148,24 +148,97 @@ All three Lambda functions run on arm64 (Graviton). API keys are stored in AWS S
 
 ## Frontend
 
-A single-page search UI built with Vue 3 (Composition API) is available at `frontend/index.html`. It includes:
+A single-page search UI built with **Vue 3** (Composition API, `<script setup>`, Vite) is available in the `frontend/` directory. It includes:
 
 - **Theme toggle:** Switch between dark and light modes (persisted in localStorage)
 - **Search form:** Index name, query, and optional filter fields
-- **Loading state:** Progress indicator with elapsed time counter
+- **Loading state:** Animated progress indicator with elapsed time counter
 - **Response display:** Success and error states with request metadata
 
-### Running the frontend
+### Project structure
 
-Open `frontend/index.html` directly in your browser -- no build step or server required. The page loads Vue 3 via CDN (ES module import map) and posts directly to the API Gateway endpoint.
-
-Before using it, update the `API_URL` constant in the `<script>` section at the bottom of the file to match your deployed `SearchApiUrl`:
-
-```javascript
-const API_URL = 'https://<your-api-id>.execute-api.us-east-1.amazonaws.com/search'
+```
+frontend/
+├── index.html                  # Vite entry point
+├── package.json                # Vue 3 + Vite dependencies
+├── vite.config.js              # Vite config (host: 0.0.0.0 for EC2)
+└── src/
+    ├── main.js                 # App bootstrap
+    ├── App.vue                 # Root component
+    ├── config.js               # API endpoint URL
+    ├── style.css               # Global styles + theme variables
+    ├── composables/
+    │   ├── useTheme.js         # Dark/light theme composable
+    │   └── useSearch.js        # Search API + loading state composable
+    └── components/
+        ├── AppHeader.vue       # Title, badges, theme toggle
+        ├── ThemeToggle.vue     # Dark/light switch
+        ├── SearchForm.vue      # Form with inputs and submit
+        ├── SearchResult.vue    # Result display card
+        └── AppFooter.vue       # Footer
 ```
 
-The API returns CORS headers (`access-control-allow-origin: *`), so the frontend works from `file://` or any static host.
+### Configuration
+
+Before running, update the API endpoint in `frontend/src/config.js` to match your deployed `SearchApiUrl`:
+
+```javascript
+export const API_URL = 'https://<your-api-id>.execute-api.us-east-1.amazonaws.com/search'
+```
+
+### Local development
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The dev server starts at `http://localhost:5173` with hot-module replacement.
+
+### Production build
+
+```bash
+cd frontend
+npm run build
+```
+
+This generates optimized static files in `frontend/dist/`.
+
+### Deploy on EC2 with nginx
+
+To serve the frontend from an EC2 instance:
+
+1. **Launch an EC2 instance** (Amazon Linux 2023, t3.micro is sufficient) with a security group allowing inbound HTTP (port 80) and SSH (port 22).
+
+2. **Install nginx and Node.js:**
+   ```bash
+   sudo dnf install -y nginx
+   sudo dnf install -y nodejs
+   sudo systemctl enable nginx
+   ```
+
+3. **Clone the repo and build the frontend:**
+   ```bash
+   git clone <repo-url>
+   cd hackathon/frontend
+   npm install
+   npm run build
+   ```
+
+4. **Copy the build output to the nginx web root:**
+   ```bash
+   sudo cp -r dist/* /usr/share/nginx/html/
+   ```
+
+5. **Start nginx:**
+   ```bash
+   sudo systemctl start nginx
+   ```
+
+6. The frontend is now accessible at `http://<ec2-public-ip>/`. The API Gateway returns CORS headers (`access-control-allow-origin: *`), so cross-origin requests from the EC2-hosted frontend work without additional configuration.
+
+To update the frontend after code changes, rebuild (`npm run build`) and re-copy the `dist/` contents to the nginx web root.
 
 ## Test Scripts
 

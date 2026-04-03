@@ -189,6 +189,15 @@ Resources:
   # ---------- Search HTTP API ----------
   SearchHttpApi:
     Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - Content-Type
 
 Outputs:
   VectorsBucketName:

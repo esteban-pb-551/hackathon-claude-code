@@ -14,10 +14,14 @@ struct SearchRequest {
 }
 
 /// Build a JSON response with the given status code and body.
+/// Includes CORS headers so the frontend can call the API from any origin.
 fn json_response(status_code: u16, body: serde_json::Value) -> Result<Response<Body>, Error> {
     let resp = Response::builder()
         .status(status_code)
         .header("content-type", "application/json")
+        .header("access-control-allow-origin", "*")
+        .header("access-control-allow-methods", "POST, OPTIONS")
+        .header("access-control-allow-headers", "Content-Type")
         .body(body.to_string().into())
         .map_err(Box::new)?;
     Ok(resp)
