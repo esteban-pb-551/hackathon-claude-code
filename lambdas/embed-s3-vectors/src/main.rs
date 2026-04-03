@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Context;
 use aws_sdk_s3vectors::types::{PutInputVector, VectorData};
 use aws_smithy_types::Document;
-use lambda_runtime::{service_fn, LambdaEvent, Error};
+use lambda_runtime::{service_fn, tracing, LambdaEvent, Error};
 use mongodb_voyageai::{
     Client as VoyageClient,
     chunk::{
@@ -21,7 +21,9 @@ struct EmbedRequest {
     index_name: String,
 }
 
-/// Fetch a secret value from AWS Secrets Manager and set it as an environment variable.
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Fetch a secret value from AWS Secrets Manager and set it as an environment variable.
+//
 async fn load_secret(
     client: &aws_sdk_secretsmanager::Client,
     secret_arn: &str,
@@ -44,22 +46,9 @@ async fn load_secret(
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-        .load()
-        .await;
-
-    // Load VoyageAI API key from Secrets Manager before starting the handler.
-    // VoyageClient::from_env() reads VOYAGEAI_API_KEY at construction time.
-    let secrets = aws_sdk_secretsmanager::Client::new(&config);
-    let voyage_secret_arn =
-        std::env::var("VOYAGE_SECRET_ARN").map_err(|e| Error::from(e.to_string()))?;
-    load_secret(&secrets, &voyage_secret_arn, "VOYAGEAI_API_KEY").await?;
-
-    lambda_runtime::run(service_fn(handler)).await
-}
-
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Lambda handler function
+//
 async fn handler(event: LambdaEvent<EmbedRequest>) -> Result<serde_json::Value, Error> {
     let (request, _context) = event.into_parts();
 
@@ -77,7 +66,10 @@ async fn handler(event: LambdaEvent<EmbedRequest>) -> Result<serde_json::Value, 
         .send()
         .await
         .with_context(|| format!("Failed to get S3 object: {}", request.object_key))
-        .map_err(|e| Error::from(e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("Failed to get S3 object: {}", request.object_key);
+            Error::from(e.to_string())
+        })?;
 
     let filter = resp
         .metadata()
@@ -90,14 +82,21 @@ async fn handler(event: LambdaEvent<EmbedRequest>) -> Result<serde_json::Value, 
         .collect()
         .await
         .context("Failed to read S3 object body")
-        .map_err(|e| Error::from(e.to_string()))?
+        .map_err(|e| {
+            tracing::error!("Failed to read S3 object body: {}", request.object_key);
+            Error::from(e.to_string())
+        })?
         .into_bytes();
 
     let content = String::from_utf8(body.to_vec())
         .context("S3 object is not valid UTF-8")
-        .map_err(|e| Error::from(e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("S3 object is not valid UTF-8: {}", request.object_key);
+            Error::from(e.to_string())
+        })?;
 
     if content.is_empty() {
+        tracing::error!("File content is empty: {}", request.object_key);
         return Err(Error::from(format!(
             "File content is empty: {}",
             request.object_key
@@ -123,11 +122,18 @@ async fn handler(event: LambdaEvent<EmbedRequest>) -> Result<serde_json::Value, 
         .send()
         .await
         .context("Failed to generate VoyageAI embeddings")
-        .map_err(|e| Error::from(e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!("Failed to generate VoyageAI embeddings");
+            Error::from(e.to_string())
+        })?;
 
     // 4. Insert vectors into S3 Vectors
     let vector_bucket =
-        std::env::var("VECTOR_BUCKET_NAME").map_err(|e| Error::from(e.to_string()))?;
+        std::env::var("VECTOR_BUCKET_NAME")
+        .map_err(|e| {
+            tracing::error!("Failed to get VECTOR_BUCKET_NAME from environment");
+            Error::from(e.to_string())
+        })?;
     let s3vectors = aws_sdk_s3vectors::Client::new(&config);
 
     let mut vectors: Vec<PutInputVector> = Vec::new();
@@ -149,7 +155,10 @@ async fn handler(event: LambdaEvent<EmbedRequest>) -> Result<serde_json::Value, 
             .metadata(metadata)
             .build()
             .with_context(|| format!("Failed to build vector #{}", i))
-            .map_err(|e| Error::from(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("Failed to build vector #{}", i);
+                Error::from(e.to_string())
+            })?;
 
         vectors.push(vector);
     }
@@ -164,11 +173,35 @@ async fn handler(event: LambdaEvent<EmbedRequest>) -> Result<serde_json::Value, 
             .send()
             .await
             .context("Failed to put vectors into S3 Vectors")
-            .map_err(|e| Error::from(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("Failed to put vectors into S3 Vectors");
+                Error::from(e.to_string())
+            })?;
     }
 
+    tracing::info!("Successfully processed {} chunks", chunks.len());
     Ok(serde_json::json!({
         "status": "success",
         "chunks_processed": chunks.len()
     }))
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Main function
+//
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    tracing::init_default_subscriber();
+    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .load()
+        .await;
+    
+    // VoyageClient::from_env() reads VOYAGEAI_API_KEY at construction time.
+    // Load VoyageAI API key from Secrets Manager before starting the handler.
+    let secrets = aws_sdk_secretsmanager::Client::new(&config);
+    let voyage_secret_arn =
+        std::env::var("VOYAGE_SECRET_ARN").map_err(|e| Error::from(e.to_string()))?;
+    load_secret(&secrets, &voyage_secret_arn, "VOYAGEAI_API_KEY").await?;
+
+    lambda_runtime::run(service_fn(handler)).await
 }
