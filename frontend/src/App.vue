@@ -1,15 +1,21 @@
 <script setup>
 import { useTheme } from './composables/useTheme.js'
 import { useSearch } from './composables/useSearch.js'
+import { API_URL } from './config.js'
 import AppHeader from './components/AppHeader.vue'
 import SearchForm from './components/SearchForm.vue'
 import SearchResult from './components/SearchResult.vue'
 import AppFooter from './components/AppFooter.vue'
 
+console.info('[app] S3 Vectors Search frontend loaded')
+console.info('[app] API endpoint: %s', API_URL)
+console.info('[app] Vue %s | Build: %s', __VUE_OPTIONS_API__ !== undefined ? '3.x' : 'unknown', import.meta.env.MODE)
+
 const { isDark, toggle: toggleTheme } = useTheme()
 const { isLoading, elapsedDisplay, result, search } = useSearch()
 
 function onSearch({ indexName, query, filter }) {
+  console.info('[app] Search submitted:', { indexName, query, filter: filter || '(none)' })
   search(indexName, query, filter)
 }
 </script>

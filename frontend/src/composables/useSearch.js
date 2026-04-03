@@ -69,16 +69,20 @@ export function useSearch() {
 
     try {
       // Step 1: POST to kick off the search (expects HTTP 202)
+      console.info('[search] POST %s', API_URL, { index_name: indexName, query, filter: filter || '(none)' })
       const postRes = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       })
 
+      console.info('[search] POST response: %d %s', postRes.status, postRes.statusText)
       const postData = await postRes.json()
+      console.info('[search] POST body:', postData)
 
       if (!postData.request_id) {
         // Backend did not return a request_id — treat as unexpected response
+        console.error('[search] No request_id in response. Status: %d, body:', postRes.status, postData)
         stopTimer()
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
         result.value = {
@@ -94,15 +98,20 @@ export function useSearch() {
       }
 
       const requestId = postData.request_id
+      console.info('[search] Got request_id: %s — starting polling', requestId)
 
       // Step 2: Poll GET /search/{request_id} every 2 seconds
       const pollUrl = `${API_URL}/${requestId}`
       const pollStart = Date.now()
+      let pollCount = 0
 
       await new Promise((resolve) => {
         pollTimer = setInterval(async () => {
+          pollCount++
+
           // Safety-net timeout
           if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
+            console.error('[poll] Timeout after %d polls (%ds)', pollCount, ((Date.now() - pollStart) / 1000).toFixed(1))
             stopPolling()
             stopTimer()
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
@@ -120,10 +129,13 @@ export function useSearch() {
           }
 
           try {
+            console.info('[poll] #%d GET %s', pollCount, pollUrl)
             const pollRes = await fetch(pollUrl)
             const pollData = await pollRes.json()
+            console.info('[poll] #%d status: %s', pollCount, pollData.status, pollData)
 
             if (pollData.status === 'complete') {
+              console.info('[poll] Complete after %d polls. Response length: %d chars', pollCount, (pollData.response || '').length)
               stopPolling()
               stopTimer()
               const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
@@ -138,6 +150,7 @@ export function useSearch() {
               isLoading.value = false
               resolve()
             } else if (pollData.status === 'error') {
+              console.error('[poll] Backend error after %d polls:', pollCount, pollData.error || pollData)
               stopPolling()
               stopTimer()
               const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
@@ -155,6 +168,7 @@ export function useSearch() {
             // status === "pending" → keep polling
           } catch (pollErr) {
             // Network error during polling
+            console.error('[poll] Network error on poll #%d:', pollCount, pollErr)
             stopPolling()
             stopTimer()
             const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
@@ -175,6 +189,7 @@ export function useSearch() {
       })
     } catch (err) {
       // Network error on the initial POST
+      console.error('[search] POST failed:', err)
       stopTimer()
       stopPolling()
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
