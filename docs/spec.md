@@ -21,8 +21,9 @@
 | `mongodb-voyageai` | 0.1.2 | VoyageAI embedding client + text normalization/chunking | [docs.rs](https://docs.rs/mongodb-voyageai/0.1.2/mongodb_voyageai/) |
 | `reqwest` | 0.13.2 [json, native-tls] | HTTP client for GLM-5 API call (SearchS3Vectors only) | [docs.rs](https://docs.rs/reqwest/0.13.2/reqwest/) |
 | `aws-sdk-secretsmanager` | 1 | Fetch API keys from Secrets Manager at runtime | [docs.rs](https://docs.rs/aws-sdk-secretsmanager/latest/aws_sdk_secretsmanager/) |
-| `lambda_runtime` | 1.1.2 | Lambda handler runtime | [docs.rs](https://docs.rs/lambda_runtime/latest/lambda_runtime/) |
-| `aws_lambda_events` | 1.1.2 | Lambda event type definitions | [docs.rs](https://docs.rs/aws_lambda_events/latest/aws_lambda_events/) |
+| `lambda_http` | 1.0.0 | Lambda HTTP handler runtime (SearchS3Vectors) | [docs.rs](https://docs.rs/lambda_http/latest/lambda_http/) |
+| `lambda_runtime` | 1.1.2 | Lambda handler runtime (EmbedS3Vectors) | [docs.rs](https://docs.rs/lambda_runtime/latest/lambda_runtime/) |
+| `aws_lambda_events` | 1.1.2 | Lambda event type definitions (EmbedS3Vectors) | [docs.rs](https://docs.rs/aws_lambda_events/latest/aws_lambda_events/) |
 | `aws-config` | latest | AWS SDK shared configuration | [docs.rs](https://docs.rs/aws-config/latest/aws_config/) |
 | `aws-smithy-types` | latest | `Document` type for S3 Vectors metadata | [docs.rs](https://docs.rs/aws-smithy-types/latest/aws_smithy_types/) |
 | `tokio` | latest [full] | Async runtime | [docs.rs](https://docs.rs/tokio/latest/tokio/) |
@@ -45,7 +46,7 @@ Dependencies managed with `uv` (`pyproject.toml` + `uv.lock`). `requirements.txt
 - **Rust build:** Cargo Lambda (already installed), `BuildMethod: makefile` with `--compiler cargo` for native aarch64
 - **Architecture:** arm64 (Graviton) for all Lambdas
 - **Region:** us-east-1
-- **Demo:** Live in AWS. Tests run against real AWS services — no mocks. Test script: `scripts/test-etapa1.sh`
+- **Demo:** Live in AWS. Tests run against real AWS services — no mocks. Test scripts: `scripts/test-etapa1.sh`, `scripts/test-etapa2.sh`
 - **Secrets management:** API keys stored in AWS Secrets Manager (created by SAM template). Lambdas receive secret ARNs as env vars and fetch values at runtime via `aws-sdk-secretsmanager`.
 - **Environment variables:**
   - `VOYAGE_SECRET_ARN` — ARN of VoyageAI API key secret (EmbedS3Vectors, SearchS3Vectors)
@@ -375,7 +376,7 @@ All Lambdas receive `VECTOR_BUCKET_NAME` (bucket name extracted from ARN). Rust 
 
 - CheckS3Vectors: `s3vectors:GetIndex`, `s3vectors:CreateIndex` (scoped to VectorsBucket ARN + `/*`), `lambda:InvokeFunction` (EmbedS3Vectors ARN)
 - EmbedS3Vectors: `secretsmanager:GetSecretValue` (scoped to VoyageApiKeySecret), `s3:GetObject` (scoped to UploadBucket), `s3vectors:PutVectors` (scoped to VectorsBucket ARN + `/*`)
-- SearchS3Vectors: `secretsmanager:GetSecretValue` (scoped to VoyageApiKeySecret + FriendliTokenSecret), `s3vectors:GetIndex`, `s3vectors:QueryVectors` (scoped to VectorsBucket ARN + `/*`)
+- SearchS3Vectors: `secretsmanager:GetSecretValue` (scoped to VoyageApiKeySecret + FriendliTokenSecret), `s3vectors:GetIndex`, `s3vectors:QueryVectors`, `s3vectors:GetVectors` (scoped to VectorsBucket ARN + `/*`)
 
 ---
 
@@ -431,15 +432,17 @@ hackathon/
 │   │   │   └── main.rs                # Handler: fetch secret, read S3, chunk, embed, store
 │   │   ├── Cargo.toml                 # aws-sdk-s3vectors, aws-sdk-s3, aws-sdk-secretsmanager, etc.
 │   │   └── Makefile                   # SAM build target (cargo lambda --compiler cargo)
-│   └── search-s3-vectors/             # SearchS3Vectors (Rust)
+│   └── search-s3-vectors/             # SearchS3Vectors (Rust, lambda_http)
 │       ├── src/
-│       │   └── main.rs                # Handler: embed query, search vectors, call GLM-5
-│       ├── Cargo.toml                 # aws-sdk-s3vectors, mongodb-voyageai, reqwest, etc.
+│       │   ├── main.rs                # Entry point: cold start secrets, run handler
+│       │   └── http_handler.rs        # Handler: embed query, search vectors, call GLM-5
+│       ├── Cargo.toml                 # aws-sdk-s3vectors, mongodb-voyageai, lambda_http, reqwest, etc.
 │       └── Makefile                   # SAM build target
 ├── template.yaml                      # SAM template: Secrets, S3 Vectors Bucket, S3, EventBridge, Lambdas, API Gateway
 ├── samconfig.toml                     # SAM deploy config with stack-level tags
 ├── scripts/
-│   └── test-etapa1.sh                 # End-to-end test for ingestion pipeline
+│   ├── test-etapa1.sh                 # End-to-end test for ingestion pipeline
+│   └── test-etapa2.sh                 # End-to-end test for semantic search API
 ├── events/                            # Test event payloads and data
 │   └── test-data/
 │       └── back_to_the_future.txt

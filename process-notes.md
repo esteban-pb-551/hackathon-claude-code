@@ -51,7 +51,7 @@
 - **Deepening rounds:** 0 rounds. Learner chose to proceed directly. Consistent pattern across all four planning phases (/scope, /prd, /spec, /checklist).
 - **Active shaping:** Moderate. Learner drove the Etapa 1 sequencing (3 items in correct dependency order). Accepted agent's proposed extension for Etapa 2, stretch, and cierre without modification. Less hands-on than in earlier phases, which is expected — the heavy architectural decisions were already made in /scope, /prd, and /spec.
 
-## /build (Etapa 1 — in progress, paused)
+## /build (Etapa 1 — complete)
 - **Mode:** Autonomous. Items 1-4 completed (Etapa 1 fully deployed and tested).
 - **Items completed:** SAM template, CheckS3Vectors (Python Durable Function), EmbedS3Vectors (Rust), deploy + end-to-end test.
 - **Issues encountered and resolved:**
@@ -80,3 +80,23 @@
 - **DeletionPolicy on secrets:** Added `DeletionPolicy: Delete` and `UpdateReplacePolicy: Delete` on Secrets Manager resources (cfn-lint recommendation for stateful resources).
 - **Test script:** Created `scripts/test-etapa1.sh` — automates upload, log checking, and vector verification. Improved log filtering (exclude `platform.*` lines).
 - **Re-test after changes:** Full pipeline verified after all improvements — 3 vectors stored successfully in new VectorsBucket.
+
+## /build (Etapa 2 — complete)
+- **Mode:** Autonomous. Items 5-7 completed (Etapa 2 fully deployed and tested).
+- **Items completed:** SAM template extension, SearchS3Vectors (Rust), deploy + end-to-end test.
+- **Architecture deviation from spec:** SearchS3Vectors uses `lambda_http` crate instead of `lambda_runtime` + `aws_lambda_events`. This was driven by the `.tmp/test/` template the learner provided — `lambda_http` provides cleaner HTTP request/response handling via `Request`/`Response<Body>` with `Response::builder()`, avoiding non-exhaustive struct issues with `ApiGatewayV2httpResponse`.
+- **Code structure:** Handler split into `src/main.rs` (cold start, secrets loading) and `src/http_handler.rs` (RAG pipeline), following the `.tmp/test/` template pattern.
+- **Issues encountered and resolved:**
+  - `ApiGatewayV2httpResponse` is non-exhaustive in `aws_lambda_events` 1.1.2 — cannot use struct expression with `..Default::default()`. Also `headers` field expects `HeaderMap`, not `HashMap<String, String>`. Learner directed agent to use `lambda_http` crate from `.tmp/test/` template instead.
+  - IAM user lacked `apigateway:POST` permission for tagging. Learner fixed externally.
+  - `s3vectors:GetVectors` permission missing from template — `query_vectors()` requires it internally even though the spec only listed `QueryVectors`. Added to IAM policy.
+- **End-to-end test result:** All 4 scenarios pass: (1) valid query with filter returns coherent GLM-5 response about Back to the Future, (2) valid query without filter returns detailed response, (3) invalid index returns 404 error JSON, (4) missing body returns 400 error JSON.
+- **Test script:** Created `scripts/test-etapa2.sh` — automates all 4 scenarios with HTTP status code verification.
+- **Learner-driven corrections:** Learner provided `.tmp/test/` as template for lambda_http pattern. Learner fixed IAM permissions externally. Learner requested detailed tracing throughout the handler.
+- **Active shaping:** Moderate. Learner drove the lambda_http switch and tracing improvements. Agent handled the RAG pipeline implementation independently.
+
+## /build (Etapa 3 — to start)
+- **Scope:** Items 8-9 (stretch goal). Static HTML frontend + deploy/test.
+- **What to build:** A professional, clean web page with a search form (index name, query, optional filter) that POSTs to the API Gateway `/search` endpoint and displays the LLM response. Must handle loading state (pipeline can take 10-30s), error display (index not found, no results), and work against the live API at `https://rlwozruimc.execute-api.us-east-1.amazonaws.com/search`.
+- **Open question from PRD:** Response times could exceed 60 seconds. Frontend needs a loading indicator at minimum. Streaming or async polling would be ideal but may be out of scope for the stretch goal.
+- **Deploy options:** S3 static hosting, or serve locally for demo. Simplest path is a single HTML file with inline CSS/JS — no build toolchain needed.

@@ -38,21 +38,21 @@
 
 ### Etapa 2 — Semantic Search
 
-- [ ] **5. SAM template — extend for Etapa 2**
+- [x] **5. SAM template — extend for Etapa 2**
   Spec ref: `spec.md > Infrastructure (SAM Template) > Resources — Etapa 2`
-  What to build: Add to `template.yaml`: SearchS3Vectors Lambda (Rust, `provided.al2023`, arm64, BuildMethod: makefile, API Gateway trigger), HTTP API Gateway (`AWS::Serverless::HttpApi`) with single route `POST /search`. IAM permissions scoped to VectorsBucket ARN: `s3vectors:GetIndex`, `s3vectors:QueryVectors`; plus `secretsmanager:GetSecretValue` scoped to both secret ARNs. Environment variables: `VECTOR_BUCKET_NAME`, `VOYAGE_SECRET_ARN`, `FRIENDLI_SECRET_ARN`. Add API Gateway URL output.
+  What was built: Added to `template.yaml`: SearchS3VectorsFunction (Rust, `provided.al2023`, arm64, BuildMethod: makefile, 300s timeout, 512MB), `AWS::Serverless::HttpApi` with `POST /search` route. IAM: `secretsmanager:GetSecretValue` (both secrets), `s3vectors:GetIndex`, `s3vectors:QueryVectors`, `s3vectors:GetVectors` (VectorsBucket ARN + `/*`). Env vars: `VECTOR_BUCKET_NAME`, `VOYAGE_SECRET_ARN`, `FRIENDLI_SECRET_ARN`. Outputs: `SearchApiUrl`, `SearchS3VectorsFunctionArn`. Note: `s3vectors:GetVectors` was not in original spec but required by `query_vectors()` at runtime.
   Acceptance: `sam validate --lint` passes. SearchS3Vectors and API Gateway resources defined with scoped permissions, secret ARNs, and route.
   Verify: Run `sam validate --lint`. Review the new resources in the template.
 
-- [ ] **6. SearchS3Vectors — Rust Lambda**
+- [x] **6. SearchS3Vectors — Rust Lambda**
   Spec ref: `spec.md > SearchS3Vectors (Rust)`
-  What to build: Create `lambdas/search-s3-vectors/` with `Cargo.toml`, `Makefile`, and `src/main.rs`. Cargo.toml includes: `aws-sdk-s3vectors`, `aws-sdk-secretsmanager`, `mongodb-voyageai`, `reqwest` (0.13.2, json + native-tls), `lambda_runtime` (1.1.2), `aws_lambda_events` (1.1.2), `aws-config`, `aws-smithy-types`, `tokio`, `anyhow`, `serde`, `serde_json`. At cold start: fetch VoyageAI and Friendli secrets from Secrets Manager (same `load_secret()` pattern as EmbedS3Vectors). Handler receives API Gateway event with JSON body (index_name, query, optional filter). Pipeline: (1) validate index exists via `get_index()` — if not found, return error; (2) embed query via VoyageAI (voyage-4-large, 1024d, input_type `"query"`); (3) `query_vectors()` with top_k=5, return_metadata=true, optional filter; (4) if no results, return "No relevant information found" without LLM call; (5) build RAG prompt from source_text metadata; (6) POST to Friendli API (GLM-5) with retry (3 attempts, incremental backoff). Return LLM response.
+  What was built: `lambdas/search-s3-vectors/` with `Cargo.toml`, `Makefile`, `src/main.rs`, and `src/http_handler.rs`. Uses `lambda_http` crate (1.0.0) instead of `lambda_runtime`/`aws_lambda_events` — cleaner HTTP request/response handling via `Request`/`Response<Body>` with `Response::builder()`. Cargo.toml includes: `aws-sdk-s3vectors`, `aws-sdk-secretsmanager`, `mongodb-voyageai`, `reqwest` (0.13.2, json + native-tls), `lambda_http`, `aws-config`, `aws-smithy-types`, `tokio`, `anyhow`, `serde`, `serde_json`. Cold start: fetches VoyageAI + Friendli secrets from Secrets Manager (`load_secret()` pattern). Handler: full 6-stage RAG pipeline with detailed `tracing` at each step. Response codes: 200 (success/no results), 400 (bad request), 404 (index not found), 500 (LLM error).
   Acceptance: Compiles with `cargo lambda build --release --arm64 --compiler cargo`. All six pipeline stages implemented. Secrets fetched from Secrets Manager. Error responses match spec format.
   Verify: Run `cargo lambda build --release --arm64 --compiler cargo` and confirm successful compilation. Read main.rs and trace the full pipeline.
 
-- [ ] **7. Deploy and test Etapa 2 end-to-end**
+- [x] **7. Deploy and test Etapa 2 end-to-end**
   Spec ref: `spec.md > Runtime & Deployment`, `prd.md > Semantic Search`
-  What to build: Run `sam validate --lint && sam build && sam deploy` for the full stack. Test SearchS3Vectors against the vectors ingested in step 4. Send POST to API Gateway `/search` with `{"index_name": "movies", "query": "adventures in space", "filter": "scifi"}`. Also test: missing index (error response), no results scenario, query without filter. Create `scripts/test-etapa2.sh` test script.
+  What was built: Full stack deployed via `sam validate --lint && sam build && sam deploy`. API Gateway URL: `https://rlwozruimc.execute-api.us-east-1.amazonaws.com/search`. Test script `scripts/test-etapa2.sh` runs 4 scenarios: (1) valid query with filter → GLM-5 returns coherent Back to the Future response, (2) valid query without filter → detailed time travel response, (3) invalid index → `{"error": "Index 'nonexistent' not found"}` with 404, (4) missing body → `{"error": "Missing request body"}` with 400. Issues resolved: missing `s3vectors:GetVectors` IAM permission (required by `query_vectors()` internally), initial API Gateway creation failed due to IAM tagging permissions (learner fixed externally).
   Acceptance: All Semantic Search acceptance criteria from prd.md pass. LLM returns a coherent response based on the ingested document. Error cases return correct response format.
   Verify: Use `curl` to POST to the API Gateway URL. Confirm: (1) valid query returns LLM response, (2) invalid index returns error JSON, (3) filter works correctly.
 

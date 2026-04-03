@@ -17,7 +17,7 @@ Developers who want semantic search over document collections today must manage 
   - [ ] EmbedS3Vectors checks that the file content is not null; if null, returns an error that CheckS3Vectors captures and reports as a failed job
   - [ ] If the S3 object has a `filter` metadata key, its value is stored as filterable metadata; if absent, defaults to `none`
   - [ ] Text is chunked using `mongodb-voyageai` crate (`normalize` with `NormalizerConfig::prose()`, then `chunk_recursive`)
-  - [ ] Embeddings are generated via VoyageAI (Voyage 4 Lite, 1024 dimensions)
+  - [ ] Embeddings are generated via VoyageAI (Voyage 4 Large, 1024 dimensions)
   - [ ] Vectors are inserted into S3 Vectors with: `filter` (filterable metadata) and `source_text` (non-filterable metadata containing the chunk content)
   - [ ] EventBridge rule only triggers for `.txt` files — other file types are ignored
 
@@ -88,5 +88,5 @@ Etapa 1 and 2 must both be fully functional for the Devpost submission. The demo
 ## Open Questions
 
 - **Long response times for search (Etapa 3):** The full search + LLM pipeline could take over 60 seconds. How should the frontend handle this? Loading indicator, streaming response, async polling? Needs resolution before building Etapa 3.
-- **GLM-5 API rate limits and error handling:** What happens if the GLM-5 API is unavailable or rate-limited during a search? Needs resolution before building Etapa 2.
-- **S3 Vectors index configuration details:** Cosine distance, Float32, 1024 dimensions are set in the scope — are these configurable per index or hardcoded? Can wait until build time.
+- ~~**GLM-5 API rate limits and error handling:** What happens if the GLM-5 API is unavailable or rate-limited during a search?~~ **Resolved:** SearchS3Vectors implements retry with incremental backoff (3 attempts: 1s, 2s, 4s). After 3 failures, returns error JSON to caller.
+- ~~**S3 Vectors index configuration details:** Cosine distance, Float32, 1024 dimensions are set in the scope — are these configurable per index or hardcoded?~~ **Resolved:** Hardcoded in CheckS3Vectors `create_index()` call. All indexes use Float32, 1024d, Cosine.
