@@ -77,7 +77,6 @@ def ensure_index(step_ctx: StepContext, index_name: str) -> dict:
                 dimension=1024,
                 distanceMetric="cosine",
                 metadataConfiguration={
-                    "filterableMetadataKeys": ["filter"],
                     "nonFilterableMetadataKeys": ["source_text"],
                 },
             )

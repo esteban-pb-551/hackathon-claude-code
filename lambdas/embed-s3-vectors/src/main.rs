@@ -21,8 +21,42 @@ struct EmbedRequest {
     index_name: String,
 }
 
+/// Fetch a secret value from AWS Secrets Manager and set it as an environment variable.
+async fn load_secret(
+    client: &aws_sdk_secretsmanager::Client,
+    secret_arn: &str,
+    env_var: &str,
+) -> Result<(), Error> {
+    let response = client
+        .get_secret_value()
+        .secret_id(secret_arn)
+        .send()
+        .await
+        .with_context(|| format!("Failed to fetch secret: {secret_arn}"))
+        .map_err(|e| Error::from(e.to_string()))?;
+
+    let value = response
+        .secret_string()
+        .context("Secret has no string value")
+        .map_err(|e| Error::from(e.to_string()))?;
+
+    std::env::set_var(env_var, value);
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+        .load()
+        .await;
+
+    // Load VoyageAI API key from Secrets Manager before starting the handler.
+    // VoyageClient::from_env() reads VOYAGEAI_API_KEY at construction time.
+    let secrets = aws_sdk_secretsmanager::Client::new(&config);
+    let voyage_secret_arn =
+        std::env::var("VOYAGE_SECRET_ARN").map_err(|e| Error::from(e.to_string()))?;
+    load_secret(&secrets, &voyage_secret_arn, "VOYAGEAI_API_KEY").await?;
+
     lambda_runtime::run(service_fn(handler)).await
 }
 

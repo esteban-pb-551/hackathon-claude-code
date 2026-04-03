@@ -1,14 +1,11 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Semantic search application - Etapa 1
-  S3 upload -> EventBridge -> CheckS3Vectors -> EmbedS3Vectors (Rust)
+  S3 Vectors Semantic Search — serverless RAG pipeline.
+  Etapa 1: S3 upload -> EventBridge -> CheckS3Vectors -> EmbedS3Vectors
+  Etapa 2: API Gateway -> SearchS3Vectors -> S3 Vectors + GLM-5
 
 Parameters:
-  VectorBucketName:
-    Type: String
-    Description: Name of the pre-created S3 Vectors bucket
-
   VoyageApiKey:
     Type: String
     NoEcho: true
@@ -25,6 +22,33 @@ Globals:
     MemorySize: 256
 
 Resources:
+  # ---------- Secrets ----------
+  VoyageApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub "${AWS::StackName}/voyage-api-key"
+      Description: VoyageAI API key for embedding generation
+      SecretString: !Ref VoyageApiKey
+
+  FriendliTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub "${AWS::StackName}/friendli-token"
+      Description: Friendli API token for GLM-5 inference
+      SecretString: !Ref FriendliToken
+
+  # ---------- S3 Vectors Bucket ----------
+  VectorsBucket:
+    Type: AWS::S3Vectors::VectorBucket
+    Properties:
+      Tags:
+        - Key: voyageModel
+          Value: voyage-4-large
+
   # ---------- S3 Upload Bucket ----------
   UploadBucket:
     Type: AWS::S3::Bucket
@@ -40,6 +64,8 @@ Resources:
       Runtime: python3.13
       Handler: check_s3_vectors.handler
       CodeUri: lambdas/check-s3-vectors/
+      Architectures:
+        - arm64
       Timeout: 120
       DurableConfig:
         ExecutionTimeout: 600
@@ -47,7 +73,7 @@ Resources:
       AutoPublishAlias: live
       Environment:
         Variables:
-          VECTOR_BUCKET_NAME: !Ref VectorBucketName
+          VECTOR_BUCKET_NAME: !Select [1, !Split ["/", !GetAtt VectorsBucket.VectorBucketArn]]
           EMBED_FUNCTION_ARN: !GetAtt EmbedS3VectorsFunction.Arn
       Policies:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
@@ -56,7 +82,9 @@ Resources:
               Action:
                 - s3vectors:GetIndex
                 - s3vectors:CreateIndex
-              Resource: "*"
+              Resource:
+                - !GetAtt VectorsBucket.VectorBucketArn
+                - !Sub "${VectorsBucket.VectorBucketArn}/*"
         - Statement:
             - Effect: Allow
               Action:
@@ -94,9 +122,14 @@ Resources:
         - arm64
       Environment:
         Variables:
-          VECTOR_BUCKET_NAME: !Ref VectorBucketName
-          VOYAGEAI_API_KEY: !Ref VoyageApiKey
+          VECTOR_BUCKET_NAME: !Select [1, !Split ["/", !GetAtt VectorsBucket.VectorBucketArn]]
+          VOYAGE_SECRET_ARN: !Ref VoyageApiKeySecret
       Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Ref VoyageApiKeySecret
         - Statement:
             - Effect: Allow
               Action:
@@ -106,9 +139,19 @@ Resources:
             - Effect: Allow
               Action:
                 - s3vectors:PutVectors
-              Resource: "*"
+              Resource:
+                - !GetAtt VectorsBucket.VectorBucketArn
+                - !Sub "${VectorsBucket.VectorBucketArn}/*"
 
 Outputs:
+  VectorsBucketName:
+    Description: Name of the S3 Vectors bucket (managed by stack)
+    Value: !Select [1, !Split ["/", !GetAtt VectorsBucket.VectorBucketArn]]
+
+  VectorsBucketArn:
+    Description: ARN of the S3 Vectors bucket
+    Value: !GetAtt VectorsBucket.VectorBucketArn
+
   UploadBucketName:
     Description: Name of the S3 upload bucket
     Value: !Ref UploadBucket

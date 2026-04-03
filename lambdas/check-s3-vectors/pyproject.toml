@@ -1,0 +1,9 @@
+[project]
+name = "check-s3-vectors"
+version = "0.1.0"
+description = "CheckS3Vectors — Durable Function for S3 Vectors index verification and creation"
+requires-python = ">=3.13"
+dependencies = [
+    "aws-durable-execution-sdk-python",
+    "boto3",
+]

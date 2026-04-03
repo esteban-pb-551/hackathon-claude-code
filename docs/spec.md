@@ -4,7 +4,7 @@
 
 | Layer | Technology | Rationale |
 |-------|-----------|-----------|
-| Ingestion orchestrator | Python 3.12 (Lambda Durable Function) | Step Functions retry pattern for concurrent index creation |
+| Ingestion orchestrator | Python 3.13 (Lambda Durable Function) | Durable execution SDK for checkpointed retry on concurrent index creation |
 | Embedding + vector storage | Rust (Cargo Lambda) | Learner's core expertise; no native Rust + S3 Vectors tool exists yet |
 | Search + LLM | Rust (Cargo Lambda) | Same stack as ingestion; `reqwest` for LLM HTTP call |
 | Infrastructure | AWS SAM | Single template for full stack deployment |
@@ -20,6 +20,7 @@
 | `aws-sdk-s3` | latest | Read uploaded files from S3 | [docs.rs](https://docs.rs/aws-sdk-s3/latest/aws_sdk_s3/) |
 | `mongodb-voyageai` | 0.1.2 | VoyageAI embedding client + text normalization/chunking | [docs.rs](https://docs.rs/mongodb-voyageai/0.1.2/mongodb_voyageai/) |
 | `reqwest` | 0.13.2 [json, native-tls] | HTTP client for GLM-5 API call (SearchS3Vectors only) | [docs.rs](https://docs.rs/reqwest/0.13.2/reqwest/) |
+| `aws-sdk-secretsmanager` | 1 | Fetch API keys from Secrets Manager at runtime | [docs.rs](https://docs.rs/aws-sdk-secretsmanager/latest/aws_sdk_secretsmanager/) |
 | `lambda_runtime` | 1.1.2 | Lambda handler runtime | [docs.rs](https://docs.rs/lambda_runtime/latest/lambda_runtime/) |
 | `aws_lambda_events` | 1.1.2 | Lambda event type definitions | [docs.rs](https://docs.rs/aws_lambda_events/latest/aws_lambda_events/) |
 | `aws-config` | latest | AWS SDK shared configuration | [docs.rs](https://docs.rs/aws-config/latest/aws_config/) |
@@ -30,23 +31,26 @@
 
 ### Key Dependencies — Python Lambda
 
-| Package | Purpose |
-|---------|---------|
-| `boto3` | AWS SDK (S3 Vectors, Lambda invocation) |
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `boto3` | 1.42.82 | AWS SDK (S3 Vectors, Lambda invocation) |
+| `aws-durable-execution-sdk-python` | 1.3.0 | Durable execution SDK for checkpointed steps |
 
-`boto3` is available in the Lambda Python 3.12 runtime by default — no `requirements.txt` needed.
+Dependencies managed with `uv` (`pyproject.toml` + `uv.lock`). `requirements.txt` generated via `uv export` for SAM build compatibility.
 
 ## Runtime & Deployment
 
 - **Runtime:** AWS Lambda (all three functions)
-- **Deployment:** AWS SAM CLI (`sam build && sam deploy`)
-- **Rust build:** Cargo Lambda (already installed)
+- **Deployment:** AWS SAM CLI (`sam validate --lint && sam build && sam deploy`)
+- **Rust build:** Cargo Lambda (already installed), `BuildMethod: makefile` with `--compiler cargo` for native aarch64
+- **Architecture:** arm64 (Graviton) for all Lambdas
 - **Region:** us-east-1
-- **Demo:** Live in AWS. Tests run against real AWS services — no mocks.
-- **Environment variables required:**
-  - `VOYAGE_API_KEY` — VoyageAI API key (EmbedS3Vectors, SearchS3Vectors)
-  - `FRIENDLI_TOKEN` — Friendli API key (SearchS3Vectors only)
-  - `VECTOR_BUCKET_NAME` — S3 Vectors bucket name (all Lambdas)
+- **Demo:** Live in AWS. Tests run against real AWS services — no mocks. Test script: `scripts/test-etapa1.sh`
+- **Secrets management:** API keys stored in AWS Secrets Manager (created by SAM template). Lambdas receive secret ARNs as env vars and fetch values at runtime via `aws-sdk-secretsmanager`.
+- **Environment variables:**
+  - `VOYAGE_SECRET_ARN` — ARN of VoyageAI API key secret (EmbedS3Vectors, SearchS3Vectors)
+  - `FRIENDLI_SECRET_ARN` — ARN of Friendli token secret (SearchS3Vectors only)
+  - `VECTOR_BUCKET_NAME` — S3 Vectors bucket name, extracted from ARN via `!Select [1, !Split ["/", !GetAtt VectorsBucket.VectorBucketArn]]` (all Lambdas)
 
 ## Architecture Overview
 
@@ -111,7 +115,7 @@ Implements `prd.md > Document Ingestion` — index verification and creation wit
    - `data_type`: Float32
    - `dimension`: 1024
    - `distance_metric`: Cosine
-   - `metadata_configuration`: `filter` as filterable, `source_text` as non-filterable
+   - `metadata_configuration`: `source_text` as non-filterable (note: `filterableMetadataKeys` is not a valid boto3 parameter — filterable keys like `filter` are inferred automatically)
 4. Invoke EmbedS3Vectors Lambda asynchronously, passing: bucket name, full object key, index name
 
 ### Retry Logic (Durable Function)
@@ -163,7 +167,9 @@ let chunks = chunk_recursive(&clean, &ChunkConfig {
 Using `mongodb-voyageai::Client` (see `files/use_voyage.rs`):
 
 ```rust
-let voyage = VoyageClient::from_env(); // reads VOYAGE_API_KEY
+// At cold start (in main()), fetch secret from Secrets Manager and set as env var:
+// load_secret(&secrets_client, &env::var("VOYAGE_SECRET_ARN")?, "VOYAGEAI_API_KEY").await?;
+let voyage = VoyageClient::from_env(); // reads VOYAGEAI_API_KEY
 let response = voyage
     .embed(chunks.clone())
     .model(model::VOYAGE_4_LARGE)
@@ -341,28 +347,35 @@ Implements `prd.md > Infrastructure & Deployment`.
 
 | Resource | Type | Configuration |
 |----------|------|---------------|
-| S3 Bucket | `AWS::S3::Bucket` | Standard bucket for file uploads |
-| S3 Vectors Bucket | `AWS::S3Tables::TableBucket` or S3 Vectors equivalent | SAM resource; bucket name passed as `VECTOR_BUCKET_NAME` env var to all Lambdas |
+| VoyageApiKeySecret | `AWS::SecretsManager::Secret` | VoyageAI API key, `DeletionPolicy: Delete` |
+| FriendliTokenSecret | `AWS::SecretsManager::Secret` | Friendli API token, `DeletionPolicy: Delete` |
+| VectorsBucket | `AWS::S3Vectors::VectorBucket` | Created by stack, tagged `voyageModel=voyage-4-large` |
+| UploadBucket | `AWS::S3::Bucket` | Standard bucket for file uploads, EventBridge enabled |
 | EventBridge Rule | `AWS::Events::Rule` | Source: `aws.s3`, detail-type: `Object Created`, filter: suffix `.txt` |
-| CheckS3Vectors | `AWS::Serverless::Function` | Python 3.12, Durable Function (Step Functions), triggered by EventBridge |
-| EmbedS3Vectors | `AWS::Serverless::Function` | Rust (provided.al2023 via Cargo Lambda), invoked by CheckS3Vectors |
+| CheckS3Vectors | `AWS::Serverless::Function` | Python 3.13, arm64, Durable Function, triggered by EventBridge |
+| EmbedS3Vectors | `AWS::Serverless::Function` | Rust (provided.al2023, arm64, BuildMethod: makefile), invoked by CheckS3Vectors |
 
 #### Resources — Etapa 2
 
 | Resource | Type | Configuration |
 |----------|------|---------------|
-| SearchS3Vectors | `AWS::Serverless::Function` | Rust (provided.al2023 via Cargo Lambda), API Gateway HTTP POST `/search` |
+| SearchS3Vectors | `AWS::Serverless::Function` | Rust (provided.al2023, arm64, BuildMethod: makefile), API Gateway HTTP POST `/search` |
 | API Gateway | `AWS::Serverless::HttpApi` | HTTP API, single route: `POST /search` |
 
 #### Environment Variables
 
-All Lambdas receive `VECTOR_BUCKET_NAME`. Rust Lambdas additionally receive `VOYAGE_API_KEY`. SearchS3Vectors additionally receives `FRIENDLI_TOKEN`.
+All Lambdas receive `VECTOR_BUCKET_NAME` (bucket name extracted from ARN). Rust Lambdas additionally receive `VOYAGE_SECRET_ARN` (Secrets Manager ARN). SearchS3Vectors additionally receives `FRIENDLI_SECRET_ARN`.
+
+#### Tags
+
+- Stack-level (via `samconfig.toml`): `application=s3-vectors-search`, `environment=development`
+- VectorsBucket: `voyageModel=voyage-4-large`
 
 #### IAM Permissions
 
-- CheckS3Vectors: `s3vectors:GetIndex`, `s3vectors:CreateIndex`, `lambda:InvokeFunction` (EmbedS3Vectors)
-- EmbedS3Vectors: `s3:GetObject`, `s3vectors:PutVectors`
-- SearchS3Vectors: `s3vectors:GetIndex`, `s3vectors:QueryVectors`
+- CheckS3Vectors: `s3vectors:GetIndex`, `s3vectors:CreateIndex` (scoped to VectorsBucket ARN + `/*`), `lambda:InvokeFunction` (EmbedS3Vectors ARN)
+- EmbedS3Vectors: `secretsmanager:GetSecretValue` (scoped to VoyageApiKeySecret), `s3:GetObject` (scoped to UploadBucket), `s3vectors:PutVectors` (scoped to VectorsBucket ARN + `/*`)
+- SearchS3Vectors: `secretsmanager:GetSecretValue` (scoped to VoyageApiKeySecret + FriendliTokenSecret), `s3vectors:GetIndex`, `s3vectors:QueryVectors` (scoped to VectorsBucket ARN + `/*`)
 
 ---
 
@@ -409,16 +422,27 @@ S3 prefix (first path segment) becomes the index name:
 hackathon/
 ├── lambdas/
 │   ├── check-s3-vectors/              # CheckS3Vectors (Python, Durable Function)
-│   │   └── check_s3_vectors.py        # Handler: index verify/create, invoke Embed
+│   │   ├── check_s3_vectors.py        # Handler: index verify/create, invoke Embed
+│   │   ├── pyproject.toml             # Dependencies managed with uv
+│   │   ├── uv.lock                    # Pinned dependency versions
+│   │   └── requirements.txt           # Generated via `uv export` for SAM build
 │   ├── embed-s3-vectors/              # EmbedS3Vectors (Rust)
 │   │   ├── src/
-│   │   │   └── main.rs                # Handler: read S3, chunk, embed, store vectors
-│   │   └── Cargo.toml                 # aws-sdk-s3vectors, aws-sdk-s3, mongodb-voyageai, etc.
+│   │   │   └── main.rs                # Handler: fetch secret, read S3, chunk, embed, store
+│   │   ├── Cargo.toml                 # aws-sdk-s3vectors, aws-sdk-s3, aws-sdk-secretsmanager, etc.
+│   │   └── Makefile                   # SAM build target (cargo lambda --compiler cargo)
 │   └── search-s3-vectors/             # SearchS3Vectors (Rust)
 │       ├── src/
 │       │   └── main.rs                # Handler: embed query, search vectors, call GLM-5
-│       └── Cargo.toml                 # aws-sdk-s3vectors, mongodb-voyageai, reqwest, etc.
-├── template.yaml                      # SAM template: S3, EventBridge, Lambdas, API Gateway
+│       ├── Cargo.toml                 # aws-sdk-s3vectors, mongodb-voyageai, reqwest, etc.
+│       └── Makefile                   # SAM build target
+├── template.yaml                      # SAM template: Secrets, S3 Vectors Bucket, S3, EventBridge, Lambdas, API Gateway
+├── samconfig.toml                     # SAM deploy config with stack-level tags
+├── scripts/
+│   └── test-etapa1.sh                 # End-to-end test for ingestion pipeline
+├── events/                            # Test event payloads and data
+│   └── test-data/
+│       └── back_to_the_future.txt
 ├── docs/                              # Hackathon artifacts
 │   ├── learner-profile.md
 │   ├── scope.md
@@ -460,12 +484,13 @@ hackathon/
 | Service | Usage | Auth | Limits | Docs |
 |---------|-------|------|--------|------|
 | AWS S3 | File uploads (`.txt`) | IAM role | Standard S3 limits | [S3 docs](https://docs.aws.amazon.com/s3/) |
-| AWS S3 Vectors | Vector storage and similarity search | IAM role | 500 vectors/put, 1K writes/s/index, 100 top-K | [S3 Vectors docs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html) |
+| AWS S3 Vectors | Vector storage and similarity search (bucket created by SAM stack) | IAM role | 500 vectors/put, 1K writes/s/index, 100 top-K | [S3 Vectors docs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-vectors.html) |
+| AWS Secrets Manager | Store VoyageAI and Friendli API keys | IAM role | — | [Secrets Manager docs](https://docs.aws.amazon.com/secretsmanager/) |
 | AWS EventBridge | S3 → Lambda trigger | IAM role | — | [EventBridge docs](https://docs.aws.amazon.com/eventbridge/) |
-| AWS Lambda | All three functions | IAM role | 15 min timeout, 10 GB memory | [Lambda docs](https://docs.aws.amazon.com/lambda/) |
+| AWS Lambda | All three functions (arm64/Graviton) | IAM role | 15 min timeout, 10 GB memory | [Lambda docs](https://docs.aws.amazon.com/lambda/) |
 | AWS API Gateway | HTTP API for search | Public | — | [API Gateway docs](https://docs.aws.amazon.com/apigateway/) |
-| VoyageAI | Embedding generation (voyage-4-large) | `VOYAGE_API_KEY` env var | 200M free tokens/mo, 2K RPM (Tier 1) | [VoyageAI docs](https://docs.voyageai.com/) |
-| Friendli (GLM-5) | LLM response generation | `FRIENDLI_TOKEN` env var | Per-plan rate limits | [Friendli docs](https://docs.friendli.ai/) |
+| VoyageAI | Embedding generation (voyage-4-large) | Secrets Manager (`VOYAGE_SECRET_ARN`) | 200M free tokens/mo, 2K RPM (Tier 1) | [VoyageAI docs](https://docs.voyageai.com/) |
+| Friendli (GLM-5) | LLM response generation | Secrets Manager (`FRIENDLI_SECRET_ARN`) | Per-plan rate limits | [Friendli docs](https://docs.friendli.ai/) |
 
 ---
 

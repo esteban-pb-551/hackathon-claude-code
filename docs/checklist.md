@@ -14,45 +14,45 @@
 
 - [x] **1. SAM template — Etapa 1 infrastructure**
   Spec ref: `spec.md > Infrastructure (SAM Template) > Resources — Etapa 1`
-  What to build: Create `template.yaml` with: S3 bucket for file uploads, S3 Vectors bucket (`AWS::S3Tables::TableBucket` or equivalent), EventBridge rule (source `aws.s3`, detail-type `Object Created`, suffix filter `.txt`), CheckS3Vectors Lambda (Python 3.12, Durable Function, triggered by EventBridge), EmbedS3Vectors Lambda (Rust, `provided.al2023` via Cargo Lambda, invoked by CheckS3Vectors). Define IAM permissions per spec: CheckS3Vectors gets `s3vectors:GetIndex`, `s3vectors:CreateIndex`, `lambda:InvokeFunction`; EmbedS3Vectors gets `s3:GetObject`, `s3vectors:PutVectors`. Environment variables: `VECTOR_BUCKET_NAME` on all Lambdas, `VOYAGE_API_KEY` on EmbedS3Vectors.
-  Acceptance: `sam validate` passes. Template defines all Etapa 1 resources with correct permissions and environment variables.
-  Verify: Run `sam validate` and confirm no errors. Review the template and confirm all resources, permissions, and env vars match the spec.
+  What was built: `template.yaml` with: Secrets Manager secrets (VoyageAI, Friendli), `AWS::S3Vectors::VectorBucket` (created by stack, tagged `voyageModel=voyage-4-large`), S3 upload bucket, EventBridge rule (suffix `.txt`), CheckS3Vectors (Python 3.13, arm64, Durable Function), EmbedS3Vectors (Rust, arm64, BuildMethod: makefile). IAM policies scoped to specific ARNs. Environment variables: `VECTOR_BUCKET_NAME` (extracted from ARN), `VOYAGE_SECRET_ARN` (Secrets Manager). Stack-level tags via `samconfig.toml`.
+  Acceptance: `sam validate --lint` passes. Template defines all Etapa 1 resources with scoped permissions and secret-based env vars.
+  Verify: Run `sam validate --lint` and confirm no errors.
 
 - [x] **2. CheckS3Vectors — Python Durable Function**
   Spec ref: `spec.md > CheckS3Vectors (Python, Durable Function)`
-  What to build: Create `lambdas/check-s3-vectors/check_s3_vectors.py`. Handler receives EventBridge event, extracts bucket name and object key, derives index name from S3 prefix (first path segment). Calls `get_index()` — if index exists, proceeds; if not, calls `create_index()` with Float32, 1024 dimensions, cosine distance, metadata config (filter filterable, source_text non-filterable). Retry logic: up to 3 attempts, each retry checks `get_index()` first. After successful index verification/creation, invokes EmbedS3Vectors Lambda asynchronously passing bucket name, object key, index name. Captures and reports errors from invocation.
-  Acceptance: Handler parses EventBridge event correctly. Index check/create logic with retry is implemented. Async Lambda invocation passes correct payload. Error handling covers race conditions and failed invocations.
-  Verify: Read the code and trace the flow: event → derive index name → get_index → create_index (if needed, with retry) → invoke Embed. Confirm all three retry paths are handled.
+  What was built: `lambdas/check-s3-vectors/check_s3_vectors.py` using `@durable_step` / `@durable_execution` SDK. `create_index()` uses `nonFilterableMetadataKeys` only (`filterableMetadataKeys` not valid in boto3). Dependencies managed with `uv` (`pyproject.toml` + `uv.lock`), `requirements.txt` generated via `uv export`.
+  Acceptance: Handler parses EventBridge event correctly. Index check/create logic with retry is implemented. Async Lambda invocation passes correct payload.
+  Verify: Read the code and trace the flow: event → derive index name → get_index → create_index (if needed, with retry) → invoke Embed.
 
 - [x] **3. EmbedS3Vectors — Rust Lambda**
   Spec ref: `spec.md > EmbedS3Vectors (Rust)`
-  What to build: Create `lambdas/embed-s3-vectors/` with `Cargo.toml` and `src/main.rs`. Cargo.toml includes: `aws-sdk-s3vectors`, `aws-sdk-s3`, `mongodb-voyageai`, `lambda_runtime`, `aws_lambda_events`, `aws-config`, `aws-smithy-types`, `tokio`, `anyhow`, `serde`, `serde_json`. Handler receives JSON payload (bucket_name, object_key, index_name). Pipeline: (1) `get_object()` from S3, read as UTF-8, read `filter` metadata (default `"none"`), validate non-empty; (2) normalize with `NormalizerConfig::prose()`, chunk with `chunk_recursive` (size 500, overlap 80); (3) embed all chunks via VoyageAI (`voyage-4-large`, 1024d, input_type `"document"`); (4) build `PutInputVector` for each chunk (key: `{object_key}#{chunk_index}`, metadata: filter + source_text), batch into calls of max 500 vectors.
-  Acceptance: Compiles with `cargo lambda build --release`. All four pipeline stages implemented per spec. Handles >500 chunks with batched put_vectors calls. Empty file returns error.
-  Verify: Run `cargo lambda build --release` in the embed-s3-vectors directory and confirm successful compilation. Read main.rs and trace the full pipeline.
+  What was built: `lambdas/embed-s3-vectors/` with Cargo.toml, Makefile, and `src/main.rs`. Added `aws-sdk-secretsmanager` for fetching VoyageAI API key from Secrets Manager at cold start. Updated `lambda_runtime` to 1.1.2 and `aws_lambda_events` to 1.1.2. `load_secret()` helper fetches secret and sets env var before handler loop so `VoyageClient::from_env()` picks it up.
+  Acceptance: Compiles with `cargo lambda build --release --arm64 --compiler cargo`. All four pipeline stages implemented. Secrets fetched from Secrets Manager.
+  Verify: Run `cargo lambda build --release` and confirm successful compilation.
 
 - [x] **4. Deploy and test Etapa 1 end-to-end**
   Spec ref: `spec.md > Runtime & Deployment`, `prd.md > Document Ingestion`
-  What to build: Run `sam build && sam deploy` for Etapa 1. Upload a test `.txt` file (e.g., `movies/back_to_the_future.txt` with movie description content and `filter=scifi` metadata) to the S3 bucket. Verify the full pipeline executes: EventBridge triggers CheckS3Vectors, index is created, EmbedS3Vectors processes the file, vectors appear in S3 Vectors.
-  Acceptance: All EventBridge → CheckS3Vectors → EmbedS3Vectors acceptance criteria from prd.md pass. Vectors exist in S3 Vectors index `movies` with correct metadata.
-  Verify: Check CloudWatch logs for both Lambdas — confirm no errors. Use AWS CLI or SDK to list vectors in the `movies` index and confirm they exist with `filter` and `source_text` metadata.
+  What was built: `sam validate --lint && sam build && sam deploy`. Test script `scripts/test-etapa1.sh` automates: upload test file, wait, check logs, verify vectors. VectorsBucket created by stack, secrets in Secrets Manager, IAM scoped to ARNs.
+  Acceptance: All EventBridge → CheckS3Vectors → EmbedS3Vectors acceptance criteria pass. Vectors exist in S3 Vectors index `movies`.
+  Verify: Run `./scripts/test-etapa1.sh` and confirm 3 vectors in `movies` index.
 
 ### Etapa 2 — Semantic Search
 
 - [ ] **5. SAM template — extend for Etapa 2**
   Spec ref: `spec.md > Infrastructure (SAM Template) > Resources — Etapa 2`
-  What to build: Add to `template.yaml`: SearchS3Vectors Lambda (Rust, `provided.al2023`, API Gateway trigger), HTTP API Gateway with single route `POST /search`. IAM permissions: `s3vectors:GetIndex`, `s3vectors:QueryVectors`. Environment variables: `VECTOR_BUCKET_NAME`, `VOYAGE_API_KEY`, `FRIENDLI_TOKEN`.
-  Acceptance: `sam validate` passes. SearchS3Vectors and API Gateway resources defined with correct permissions, env vars, and route.
-  Verify: Run `sam validate`. Review the new resources in the template.
+  What to build: Add to `template.yaml`: SearchS3Vectors Lambda (Rust, `provided.al2023`, arm64, BuildMethod: makefile, API Gateway trigger), HTTP API Gateway (`AWS::Serverless::HttpApi`) with single route `POST /search`. IAM permissions scoped to VectorsBucket ARN: `s3vectors:GetIndex`, `s3vectors:QueryVectors`; plus `secretsmanager:GetSecretValue` scoped to both secret ARNs. Environment variables: `VECTOR_BUCKET_NAME`, `VOYAGE_SECRET_ARN`, `FRIENDLI_SECRET_ARN`. Add API Gateway URL output.
+  Acceptance: `sam validate --lint` passes. SearchS3Vectors and API Gateway resources defined with scoped permissions, secret ARNs, and route.
+  Verify: Run `sam validate --lint`. Review the new resources in the template.
 
 - [ ] **6. SearchS3Vectors — Rust Lambda**
   Spec ref: `spec.md > SearchS3Vectors (Rust)`
-  What to build: Create `lambdas/search-s3-vectors/` with `Cargo.toml` and `src/main.rs`. Cargo.toml includes: `aws-sdk-s3vectors`, `mongodb-voyageai`, `reqwest` (0.13.2, json + native-tls), `lambda_runtime`, `aws_lambda_events`, `aws-config`, `aws-smithy-types`, `tokio`, `anyhow`, `serde`, `serde_json`. Handler receives API Gateway event with JSON body (index_name, query, optional filter). Pipeline: (1) validate index exists via `get_index()` — if not found, return error; (2) embed query via VoyageAI (voyage-4-large, 1024d, input_type `"query"`); (3) `query_vectors()` with top_k=5, return_metadata=true, optional filter; (4) if no results, return "No relevant information found" without LLM call; (5) build RAG prompt from source_text metadata; (6) POST to Friendli API (GLM-5) with retry (3 attempts, incremental backoff). Return LLM response.
-  Acceptance: Compiles with `cargo lambda build --release`. All six pipeline stages implemented. Error responses match spec format. Retry logic on LLM call.
-  Verify: Run `cargo lambda build --release` in the search-s3-vectors directory and confirm successful compilation. Read main.rs and trace the full pipeline.
+  What to build: Create `lambdas/search-s3-vectors/` with `Cargo.toml`, `Makefile`, and `src/main.rs`. Cargo.toml includes: `aws-sdk-s3vectors`, `aws-sdk-secretsmanager`, `mongodb-voyageai`, `reqwest` (0.13.2, json + native-tls), `lambda_runtime` (1.1.2), `aws_lambda_events` (1.1.2), `aws-config`, `aws-smithy-types`, `tokio`, `anyhow`, `serde`, `serde_json`. At cold start: fetch VoyageAI and Friendli secrets from Secrets Manager (same `load_secret()` pattern as EmbedS3Vectors). Handler receives API Gateway event with JSON body (index_name, query, optional filter). Pipeline: (1) validate index exists via `get_index()` — if not found, return error; (2) embed query via VoyageAI (voyage-4-large, 1024d, input_type `"query"`); (3) `query_vectors()` with top_k=5, return_metadata=true, optional filter; (4) if no results, return "No relevant information found" without LLM call; (5) build RAG prompt from source_text metadata; (6) POST to Friendli API (GLM-5) with retry (3 attempts, incremental backoff). Return LLM response.
+  Acceptance: Compiles with `cargo lambda build --release --arm64 --compiler cargo`. All six pipeline stages implemented. Secrets fetched from Secrets Manager. Error responses match spec format.
+  Verify: Run `cargo lambda build --release --arm64 --compiler cargo` and confirm successful compilation. Read main.rs and trace the full pipeline.
 
 - [ ] **7. Deploy and test Etapa 2 end-to-end**
   Spec ref: `spec.md > Runtime & Deployment`, `prd.md > Semantic Search`
-  What to build: Run `sam build && sam deploy` for the full stack. Test SearchS3Vectors against the vectors ingested in step 4. Send POST to API Gateway `/search` with `{"index_name": "movies", "query": "adventures in space", "filter": "scifi"}`. Also test: missing index (error response), no results scenario, query without filter.
+  What to build: Run `sam validate --lint && sam build && sam deploy` for the full stack. Test SearchS3Vectors against the vectors ingested in step 4. Send POST to API Gateway `/search` with `{"index_name": "movies", "query": "adventures in space", "filter": "scifi"}`. Also test: missing index (error response), no results scenario, query without filter. Create `scripts/test-etapa2.sh` test script.
   Acceptance: All Semantic Search acceptance criteria from prd.md pass. LLM returns a coherent response based on the ingested document. Error cases return correct response format.
   Verify: Use `curl` to POST to the API Gateway URL. Confirm: (1) valid query returns LLM response, (2) invalid index returns error JSON, (3) filter works correctly.
 

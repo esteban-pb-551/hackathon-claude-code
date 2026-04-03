@@ -45,9 +45,13 @@ Developers who want semantic search over document collections today must manage 
 ### Infrastructure & Deployment
 
 - As a developer deploying this system, I want a SAM template and clear documentation so that I can deploy the entire stack with minimal effort.
-  - [ ] SAM template defines: S3 bucket, EventBridge rule (filtered to `.txt`), CheckS3Vectors Lambda (Python, Durable Function), EmbedS3Vectors Lambda (Rust via Cargo Lambda)
+  - [ ] SAM template defines: Secrets Manager secrets, S3 Vectors bucket (`AWS::S3Vectors::VectorBucket`), S3 upload bucket, EventBridge rule (filtered to `.txt`), CheckS3Vectors Lambda (Python 3.13, arm64, Durable Function), EmbedS3Vectors Lambda (Rust, arm64 via Cargo Lambda)
+  - [ ] API keys stored in Secrets Manager (not as plain text env vars); Lambdas fetch at runtime via `aws-sdk-secretsmanager`
+  - [ ] IAM policies scoped to specific resource ARNs (not `*`)
   - [ ] SAM template is extended in Etapa 2 to include SearchS3Vectors Lambda
+  - [ ] `sam validate --lint` passes before every deploy
   - [ ] Code documentation follows Python best practices for CheckS3Vectors and Rust doc comments for EmbedS3Vectors
+  - [ ] Python dependencies managed with `uv` (`pyproject.toml` + `uv.lock`), `requirements.txt` generated for SAM
   - [ ] README.md provides complete step-by-step deployment instructions using SAM
   - [ ] README.md does not include a project tree
 

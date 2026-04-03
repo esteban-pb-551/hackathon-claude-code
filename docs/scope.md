@@ -35,8 +35,9 @@ After 29 hours:
 
 ## Loose Implementation Notes
 - **Language:** Rust throughout (both Lambdas)
-- **Deployment:** Cargo Lambda (already installed)
-- **Embedding model:** VoyageAI Voyage 4 Lite, 1024 dimensions, cosine distance
+- **Deployment:** Cargo Lambda (already installed), SAM CLI, arm64/Graviton
+- **Secrets:** AWS Secrets Manager (VoyageAI API key, Friendli token)
+- **Embedding model:** VoyageAI Voyage 4 Large, 1024 dimensions, cosine distance
 - **S3 Vectors config:** Float32 data type, cosine distance metric, metadata for source text and file origin
 - **Index naming convention:** S3 prefix (folder name) becomes the S3 Vectors index name
 - **Event flow:** S3 PutObject → EventBridge rule → async Lambda invocation

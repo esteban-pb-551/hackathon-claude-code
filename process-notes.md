@@ -66,3 +66,17 @@
 - **End-to-end test result:** Upload of `movies/back_to_the_future.txt` (filter=scifi) triggered full pipeline: EventBridge → CheckS3Vectors (ensure-index step passed, invoke-embed step completed) → EmbedS3Vectors (3 chunks embedded and stored). Vectors confirmed in S3 Vectors index `movies`.
 - **Verification checkpoint:** Learner paused build after Etapa 1 checkpoint. Etapa 2 (items 5-7) pending.
 - **Active shaping:** Very high. Learner drove the durable function correction, provided SDK documentation and example code, and directed the code rewrite. Consistent with earlier phases.
+
+## Pre-Etapa 2 improvements (learner-driven)
+- **Vectors Bucket in template:** Learner requested `AWS::S3Vectors::VectorBucket` be created in the stack instead of using a pre-existing bucket. Removed `VectorBucketName` parameter, scoped IAM policies to the specific bucket ARN.
+- **Secrets Manager:** Learner provided `AWS::SecretsManager::Secret` CloudFormation docs and Rust SDK snippet. Secrets (`VoyageApiKey`, `FriendliToken`) now stored in Secrets Manager; Lambdas receive ARNs as env vars and fetch values at runtime.
+- **uv for Python deps:** Learner requested `uv` for dependency management in `check-s3-vectors`. Now uses `pyproject.toml` + `uv.lock` as source of truth, with `requirements.txt` generated via `uv export` for SAM build compatibility.
+- **Lambda crate versions:** Updated `lambda_runtime` (0.13 → 1.1.2) and `aws_lambda_events` (0.15 → 1.1.2).
+- **Resource tagging:** Stack-level tags (`application`, `environment`) via `samconfig.toml`; `voyageModel=voyage-4-large` on VectorsBucket.
+- **arm64 on all Lambdas:** Added `Architectures: arm64` to CheckS3Vectors for consistency.
+- **Validation rule:** Run `sam validate --lint` before every deploy.
+- **VectorBucketName not a valid GetAtt:** `AWS::S3Vectors::VectorBucket` only supports `VectorBucketArn` and `CreationTime` as GetAtt attributes. Bucket name extracted via `!Select [1, !Split ["/", !GetAtt VectorsBucket.VectorBucketArn]]`.
+- **filterableMetadataKeys invalid in boto3:** `create_index()` only accepts `nonFilterableMetadataKeys` — filterable keys are inferred automatically. Removed from Python code.
+- **DeletionPolicy on secrets:** Added `DeletionPolicy: Delete` and `UpdateReplacePolicy: Delete` on Secrets Manager resources (cfn-lint recommendation for stateful resources).
+- **Test script:** Created `scripts/test-etapa1.sh` — automates upload, log checking, and vector verification. Improved log filtering (exclude `platform.*` lines).
+- **Re-test after changes:** Full pipeline verified after all improvements — 3 vectors stored successfully in new VectorsBucket.
