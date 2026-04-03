@@ -50,3 +50,19 @@
 - **Submission planning:** Learner deferred Devpost details to after all three etapas are built. Wow moment identified as the live demo flow (upload .txt → search by meaning → LLM response). GitHub repo status not discussed — to be resolved at submission time.
 - **Deepening rounds:** 0 rounds. Learner chose to proceed directly. Consistent pattern across all four planning phases (/scope, /prd, /spec, /checklist).
 - **Active shaping:** Moderate. Learner drove the Etapa 1 sequencing (3 items in correct dependency order). Accepted agent's proposed extension for Etapa 2, stretch, and cierre without modification. Less hands-on than in earlier phases, which is expected — the heavy architectural decisions were already made in /scope, /prd, and /spec.
+
+## /build (Etapa 1 — in progress, paused)
+- **Mode:** Autonomous. Items 1-4 completed (Etapa 1 fully deployed and tested).
+- **Items completed:** SAM template, CheckS3Vectors (Python Durable Function), EmbedS3Vectors (Rust), deploy + end-to-end test.
+- **Issues encountered and resolved:**
+  - Zig cross-compiler linker couldn't find OpenSSL libs for Rust Lambda build. Fixed by switching to `BuildMethod: makefile` with `--compiler cargo` (native aarch64 build).
+  - CloudFormation couldn't replace custom-named Lambda functions. Fixed by removing `FunctionName` properties from template.
+  - `mongodb-voyageai` crate expects `VOYAGEAI_API_KEY` env var, not `VOYAGE_API_KEY`. Fixed env var name in template.
+  - Python runtime mismatch: system has 3.13, SAM validated against 3.12. Learner updated template to `python3.13`.
+- **Learner-driven corrections:**
+  - Learner identified that CheckS3Vectors needed to be a proper Lambda Durable Function (not a standard Lambda with manual retry). Provided AWS documentation on durable functions, durable execution SDK, best practices for determinism and idempotency.
+  - Learner provided `@durable_step` / `DurableContext` example code and asked agent to follow that pattern. Code was rewritten to use `@durable_step` decorator with `StepContext`, `@durable_execution` handler, `context.step()` and `context.invoke()`.
+  - Learner requested `events/` directory with test event payloads.
+- **End-to-end test result:** Upload of `movies/back_to_the_future.txt` (filter=scifi) triggered full pipeline: EventBridge → CheckS3Vectors (ensure-index step passed, invoke-embed step completed) → EmbedS3Vectors (3 chunks embedded and stored). Vectors confirmed in S3 Vectors index `movies`.
+- **Verification checkpoint:** Learner paused build after Etapa 1 checkpoint. Etapa 2 (items 5-7) pending.
+- **Active shaping:** Very high. Learner drove the durable function correction, provided SDK documentation and example code, and directed the code rewrite. Consistent with earlier phases.

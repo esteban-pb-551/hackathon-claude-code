@@ -1,0 +1,25 @@
+{
+  "version": "0",
+  "id": "example-event-id-2",
+  "detail-type": "Object Created",
+  "source": "aws.s3",
+  "account": "851725313235",
+  "time": "2026-04-03T12:05:00Z",
+  "region": "us-east-1",
+  "detail": {
+    "version": "0",
+    "bucket": {
+      "name": "s3-vectors-search-uploadbucket-ls0ic2oskrzv"
+    },
+    "object": {
+      "key": "papers/attention_is_all_you_need.txt",
+      "size": 2048,
+      "etag": "example-etag-2",
+      "sequencer": "example-sequencer-2"
+    },
+    "request-id": "example-request-id-2",
+    "requester": "851725313235",
+    "source-ip-address": "127.0.0.1",
+    "reason": "PutObject"
+  }
+}

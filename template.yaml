@@ -23,7 +23,6 @@ Globals:
   Function:
     Timeout: 30
     MemorySize: 256
-    Runtime: python3.12
 
 Resources:
   # ---------- S3 Upload Bucket ----------
@@ -34,20 +33,24 @@ Resources:
         EventBridgeConfiguration:
           EventBridgeEnabled: true
 
-  # ---------- CheckS3Vectors Lambda ----------
+  # ---------- CheckS3Vectors Lambda (Durable Function) ----------
   CheckS3VectorsFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub "${AWS::StackName}-check-s3-vectors"
-      Runtime: python3.12
+      Runtime: python3.13
       Handler: check_s3_vectors.handler
       CodeUri: lambdas/check-s3-vectors/
       Timeout: 120
+      DurableConfig:
+        ExecutionTimeout: 600
+        RetentionPeriodInDays: 7
+      AutoPublishAlias: live
       Environment:
         Variables:
           VECTOR_BUCKET_NAME: !Ref VectorBucketName
-          EMBED_FUNCTION_NAME: !Ref EmbedS3VectorsFunction
+          EMBED_FUNCTION_ARN: !GetAtt EmbedS3VectorsFunction.Arn
       Policies:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicDurableExecutionRolePolicy
         - Statement:
             - Effect: Allow
               Action:
@@ -80,9 +83,8 @@ Resources:
   EmbedS3VectorsFunction:
     Type: AWS::Serverless::Function
     Metadata:
-      BuildMethod: rust-cargolambda
+      BuildMethod: makefile
     Properties:
-      FunctionName: !Sub "${AWS::StackName}-embed-s3-vectors"
       Runtime: provided.al2023
       Handler: bootstrap
       CodeUri: lambdas/embed-s3-vectors/
@@ -93,7 +95,7 @@ Resources:
       Environment:
         Variables:
           VECTOR_BUCKET_NAME: !Ref VectorBucketName
-          VOYAGE_API_KEY: !Ref VoyageApiKey
+          VOYAGEAI_API_KEY: !Ref VoyageApiKey
       Policies:
         - Statement:
             - Effect: Allow

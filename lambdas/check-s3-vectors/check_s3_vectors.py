@@ -1,66 +1,76 @@
-"""CheckS3Vectors Lambda function.
+"""CheckS3Vectors Lambda — Durable Function.
 
-Handles S3 Object Created events from EventBridge. Ensures an S3 Vectors
-index exists for the object's prefix, then asynchronously invokes the
-EmbedS3Vectors Lambda to generate and store embeddings.
+Handles S3 Object Created events from EventBridge. Uses Lambda durable execution
+to checkpoint each step: index verification/creation, then EmbedS3Vectors invocation.
+If the function is interrupted, it replays from the last checkpoint without
+re-executing completed steps.
+
+Determinism contract:
+  - Code outside context.step() / context.invoke() is deterministic (pure event parsing).
+  - All external API calls (S3 Vectors, Lambda invoke) happen inside durable operations.
+  - No global mutable state; module-level constants are read-only env vars.
+
+Idempotency:
+  - ensure-index step: check-before-create pattern. Safe to retry — either the index
+    exists (no-op) or gets created. Race conditions handled with retry loop.
+  - invoke-embed step: context.invoke() is checkpointed. If the function replays after
+    the invoke completes, the cached result is returned without re-invoking.
+  - EmbedS3Vectors itself is idempotent: vectors are keyed by {object_key}#{chunk_index},
+    so reprocessing overwrites the same keys.
 """
 
 import os
-import json
-import logging
 import time
 
 import boto3
 from botocore.exceptions import ClientError
+from aws_durable_execution_sdk_python import (
+    DurableContext,
+    StepContext,
+    durable_execution,
+    durable_step,
+)
 
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-
-s3vectors = boto3.client("s3vectors")
-lambda_client = boto3.client("lambda")
-
+# Read-only constants from environment — deterministic across replays.
 VECTOR_BUCKET_NAME = os.environ.get("VECTOR_BUCKET_NAME", "")
-EMBED_FUNCTION_NAME = os.environ.get("EMBED_FUNCTION_NAME", "")
+EMBED_FUNCTION_ARN = os.environ.get("EMBED_FUNCTION_ARN", "")
 
 MAX_RETRIES = 3
 
-
-def _get_index_name(object_key: str) -> str:
-    """Derive the index name from the first path segment of the S3 key."""
-    return object_key.split("/")[0]
+# Module-level boto3 clients — immutable, safe across replays.
+s3vectors_client = boto3.client("s3vectors")
 
 
-def _index_exists(index_name: str) -> bool:
-    """Check whether the S3 Vectors index already exists."""
+@durable_step
+def ensure_index(step_ctx: StepContext, index_name: str) -> dict:
+    """Check whether the S3 Vectors index exists; create it if not.
+
+    Uses a check-before-create pattern with retry logic to handle race
+    conditions when multiple files are uploaded to the same prefix
+    concurrently.
+    """
+    # Check if index already exists
     try:
-        s3vectors.get_index(
+        s3vectors_client.get_index(
             vectorBucketName=VECTOR_BUCKET_NAME,
             indexName=index_name,
         )
-        logger.info("Index '%s' already exists.", index_name)
-        return True
+        step_ctx.logger.info("Index already exists", extra={"index_name": index_name})
+        return {"created": False}
     except ClientError as exc:
         error_code = exc.response["Error"]["Code"]
-        if error_code in ("NotFoundException", "404"):
-            logger.info("Index '%s' does not exist.", index_name)
-            return False
-        raise
+        if error_code not in ("NotFoundException", "404"):
+            raise
+        step_ctx.logger.info("Index does not exist, will create", extra={"index_name": index_name})
 
-
-def _ensure_index(index_name: str) -> None:
-    """Create the index if it does not exist, with retry logic."""
-    if _index_exists(index_name):
-        return
-
+    # Create index with retry logic for concurrent creation race conditions
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            logger.info(
-                "Creating index '%s' (attempt %d/%d).",
-                index_name,
-                attempt,
-                MAX_RETRIES,
+            step_ctx.logger.info(
+                "Creating index",
+                extra={"index_name": index_name, "attempt": attempt, "max_retries": MAX_RETRIES},
             )
-            s3vectors.create_index(
+            s3vectors_client.create_index(
                 vectorBucketName=VECTOR_BUCKET_NAME,
                 indexName=index_name,
                 dataType="float32",
@@ -71,15 +81,23 @@ def _ensure_index(index_name: str) -> None:
                     "nonFilterableMetadataKeys": ["source_text"],
                 },
             )
-            logger.info("Index '%s' created successfully.", index_name)
-            return
+            step_ctx.logger.info("Index created successfully", extra={"index_name": index_name})
+            return {"created": True}
         except ClientError as exc:
-            logger.warning(
-                "create_index failed on attempt %d: %s", attempt, exc
+            step_ctx.logger.warning(
+                "create_index failed",
+                extra={"attempt": attempt, "error": str(exc)},
             )
-            # On retry, check if another invocation already created the index.
-            if _index_exists(index_name):
-                return
+            # Another invocation may have created the index concurrently
+            try:
+                s3vectors_client.get_index(
+                    vectorBucketName=VECTOR_BUCKET_NAME,
+                    indexName=index_name,
+                )
+                step_ctx.logger.info("Index now exists (concurrent creation)", extra={"index_name": index_name})
+                return {"created": False}
+            except ClientError:
+                pass
             if attempt < MAX_RETRIES:
                 time.sleep(1)
 
@@ -88,53 +106,44 @@ def _ensure_index(index_name: str) -> None:
     )
 
 
-def handler(event, context):
-    """Lambda entry point for S3 Object Created EventBridge events."""
-    logger.info("Received event: %s", json.dumps(event))
+@durable_execution
+def handler(event: dict, context: DurableContext) -> dict:
+    """Lambda entry point — durable function for S3 Object Created events.
 
+    Execution flow (two checkpointed operations):
+      1. ensure-index: verify/create the S3 Vectors index for this prefix.
+      2. invoke-embed: invoke EmbedS3Vectors to chunk, embed, and store vectors.
+
+    On replay, completed steps return cached results instantly.
+    """
+    # --- Deterministic event parsing (safe outside steps) ---
     detail = event["detail"]
     bucket_name = detail["bucket"]["name"]
     object_key = detail["object"]["key"]
-    index_name = _get_index_name(object_key)
+    index_name = object_key.split("/")[0]
 
-    logger.info(
-        "Processing object '%s' from bucket '%s' with index '%s'.",
-        object_key,
-        bucket_name,
-        index_name,
+    context.logger.info(
+        "Processing upload",
+        extra={"object_key": object_key, "bucket": bucket_name, "index_name": index_name},
     )
 
-    _ensure_index(index_name)
+    # Step 1: Ensure the S3 Vectors index exists (checkpointed).
+    context.step(ensure_index(index_name), name="ensure-index")
 
-    payload = {
-        "bucket_name": bucket_name,
-        "object_key": object_key,
-        "index_name": index_name,
-    }
-
-    try:
-        logger.info(
-            "Invoking '%s' asynchronously with payload: %s",
-            EMBED_FUNCTION_NAME,
-            json.dumps(payload),
-        )
-        response = lambda_client.invoke(
-            FunctionName=EMBED_FUNCTION_NAME,
-            InvocationType="Event",
-            Payload=json.dumps(payload),
-        )
-        logger.info(
-            "Invoke response status: %d", response["StatusCode"]
-        )
-    except ClientError as exc:
-        logger.error("Failed to invoke '%s': %s", EMBED_FUNCTION_NAME, exc)
-        raise
+    # Step 2: Invoke EmbedS3Vectors to process the file (checkpointed).
+    result = context.invoke(
+        EMBED_FUNCTION_ARN,
+        {
+            "bucket_name": bucket_name,
+            "object_key": object_key,
+            "index_name": index_name,
+        },
+        name="invoke-embed",
+    )
 
     return {
-        "statusCode": 200,
-        "body": json.dumps({
-            "message": "EmbedS3Vectors invoked successfully.",
-            "index_name": index_name,
-            "object_key": object_key,
-        }),
+        "status": "success",
+        "index_name": index_name,
+        "object_key": object_key,
+        "embed_result": result,
     }

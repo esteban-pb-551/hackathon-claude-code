@@ -1,0 +1,5 @@
+{
+  "bucket_name": "s3-vectors-search-uploadbucket-ls0ic2oskrzv",
+  "object_key": "movies/back_to_the_future.txt",
+  "index_name": "movies"
+}

@@ -12,25 +12,25 @@
 
 ### Etapa 1 — Ingestion Backend
 
-- [ ] **1. SAM template — Etapa 1 infrastructure**
+- [x] **1. SAM template — Etapa 1 infrastructure**
   Spec ref: `spec.md > Infrastructure (SAM Template) > Resources — Etapa 1`
   What to build: Create `template.yaml` with: S3 bucket for file uploads, S3 Vectors bucket (`AWS::S3Tables::TableBucket` or equivalent), EventBridge rule (source `aws.s3`, detail-type `Object Created`, suffix filter `.txt`), CheckS3Vectors Lambda (Python 3.12, Durable Function, triggered by EventBridge), EmbedS3Vectors Lambda (Rust, `provided.al2023` via Cargo Lambda, invoked by CheckS3Vectors). Define IAM permissions per spec: CheckS3Vectors gets `s3vectors:GetIndex`, `s3vectors:CreateIndex`, `lambda:InvokeFunction`; EmbedS3Vectors gets `s3:GetObject`, `s3vectors:PutVectors`. Environment variables: `VECTOR_BUCKET_NAME` on all Lambdas, `VOYAGE_API_KEY` on EmbedS3Vectors.
   Acceptance: `sam validate` passes. Template defines all Etapa 1 resources with correct permissions and environment variables.
   Verify: Run `sam validate` and confirm no errors. Review the template and confirm all resources, permissions, and env vars match the spec.
 
-- [ ] **2. CheckS3Vectors — Python Durable Function**
+- [x] **2. CheckS3Vectors — Python Durable Function**
   Spec ref: `spec.md > CheckS3Vectors (Python, Durable Function)`
   What to build: Create `lambdas/check-s3-vectors/check_s3_vectors.py`. Handler receives EventBridge event, extracts bucket name and object key, derives index name from S3 prefix (first path segment). Calls `get_index()` — if index exists, proceeds; if not, calls `create_index()` with Float32, 1024 dimensions, cosine distance, metadata config (filter filterable, source_text non-filterable). Retry logic: up to 3 attempts, each retry checks `get_index()` first. After successful index verification/creation, invokes EmbedS3Vectors Lambda asynchronously passing bucket name, object key, index name. Captures and reports errors from invocation.
   Acceptance: Handler parses EventBridge event correctly. Index check/create logic with retry is implemented. Async Lambda invocation passes correct payload. Error handling covers race conditions and failed invocations.
   Verify: Read the code and trace the flow: event → derive index name → get_index → create_index (if needed, with retry) → invoke Embed. Confirm all three retry paths are handled.
 
-- [ ] **3. EmbedS3Vectors — Rust Lambda**
+- [x] **3. EmbedS3Vectors — Rust Lambda**
   Spec ref: `spec.md > EmbedS3Vectors (Rust)`
   What to build: Create `lambdas/embed-s3-vectors/` with `Cargo.toml` and `src/main.rs`. Cargo.toml includes: `aws-sdk-s3vectors`, `aws-sdk-s3`, `mongodb-voyageai`, `lambda_runtime`, `aws_lambda_events`, `aws-config`, `aws-smithy-types`, `tokio`, `anyhow`, `serde`, `serde_json`. Handler receives JSON payload (bucket_name, object_key, index_name). Pipeline: (1) `get_object()` from S3, read as UTF-8, read `filter` metadata (default `"none"`), validate non-empty; (2) normalize with `NormalizerConfig::prose()`, chunk with `chunk_recursive` (size 500, overlap 80); (3) embed all chunks via VoyageAI (`voyage-4-large`, 1024d, input_type `"document"`); (4) build `PutInputVector` for each chunk (key: `{object_key}#{chunk_index}`, metadata: filter + source_text), batch into calls of max 500 vectors.
   Acceptance: Compiles with `cargo lambda build --release`. All four pipeline stages implemented per spec. Handles >500 chunks with batched put_vectors calls. Empty file returns error.
   Verify: Run `cargo lambda build --release` in the embed-s3-vectors directory and confirm successful compilation. Read main.rs and trace the full pipeline.
 
-- [ ] **4. Deploy and test Etapa 1 end-to-end**
+- [x] **4. Deploy and test Etapa 1 end-to-end**
   Spec ref: `spec.md > Runtime & Deployment`, `prd.md > Document Ingestion`
   What to build: Run `sam build && sam deploy` for Etapa 1. Upload a test `.txt` file (e.g., `movies/back_to_the_future.txt` with movie description content and `filter=scifi` metadata) to the S3 bucket. Verify the full pipeline executes: EventBridge triggers CheckS3Vectors, index is created, EmbedS3Vectors processes the file, vectors appear in S3 Vectors.
   Acceptance: All EventBridge → CheckS3Vectors → EmbedS3Vectors acceptance criteria from prd.md pass. Vectors exist in S3 Vectors index `movies` with correct metadata.
