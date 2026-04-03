@@ -1,7 +1,7 @@
 import { ref, computed, onUnmounted } from 'vue'
 import { API_URL } from '../config.js'
 
-const POLL_INTERVAL_MS = 2000
+const POLL_INTERVAL_MS = 4000
 const POLL_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes safety net
 
 /**
@@ -20,6 +20,7 @@ export function useSearch() {
 
   let timer = null
   let pollTimer = null
+  let pollResolve = null
   let startTime = 0
 
   const elapsedDisplay = computed(() =>
@@ -53,6 +54,26 @@ export function useSearch() {
   function cleanup() {
     stopTimer()
     stopPolling()
+  }
+
+  function cancel() {
+    if (!isLoading.value) return
+    console.info('[search] Cancelled by user')
+    cleanup()
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
+    result.value = {
+      type: 'error',
+      label: 'Cancelled',
+      content: 'Search cancelled by user.',
+      meta: `Cancelled at ${elapsed}s`,
+      elapsed,
+      request: { indexName: '', query: '', filter: '' }
+    }
+    isLoading.value = false
+    if (pollResolve) {
+      pollResolve()
+      pollResolve = null
+    }
   }
 
   onUnmounted(() => cleanup())
@@ -106,6 +127,7 @@ export function useSearch() {
       let pollCount = 0
 
       await new Promise((resolve) => {
+        pollResolve = resolve
         pollTimer = setInterval(async () => {
           pollCount++
 
@@ -207,5 +229,5 @@ export function useSearch() {
     }
   }
 
-  return { isLoading, elapsedDisplay, result, search }
+  return { isLoading, elapsedDisplay, result, search, cancel }
 }
