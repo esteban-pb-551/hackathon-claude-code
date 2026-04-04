@@ -3,6 +3,7 @@ use aws_sdk_s3::primitives::ByteStream;
 use base64::Engine;
 use lambda_http::{run, service_fn, Body, Request, Response, Error};
 use serde::Deserialize;
+use sha2::{Sha256, Digest};
 use std::env;
 use std::collections::HashMap;
 
@@ -87,14 +88,31 @@ async fn handle_upload(req: Request, state: &AppState) -> Result<Response<Body>,
         }
     };
 
-    let s3_key = format!("{}/{}", upload_req.index_name.trim(), upload_req.filename.trim());
+    // Compute SHA-256 content hash for deduplication
+    let hash = Sha256::digest(&decoded);
+    let hash_short = format!("{:x}", hash).chars().take(16).collect::<String>();
+    let s3_key = format!("{}/file-{}.txt", upload_req.index_name.trim(), hash_short);
 
     tracing::info!(
         key = %s3_key,
+        hash = %hash_short,
         filter = upload_req.filter.as_deref().unwrap_or("(none)"),
         size = decoded.len(),
-        "Uploading file to S3"
+        "Checking for duplicate before upload"
     );
+
+    // Check if file with same content already exists
+    match state.s3.head_object().bucket(&state.bucket_name).key(&s3_key).send().await {
+        Ok(_) => {
+            tracing::info!(key = %s3_key, "Duplicate detected, rejecting upload");
+            return json_response(409, serde_json::json!({
+                "error": "File with identical content already exists in this index"
+            }));
+        }
+        Err(e) => {
+            tracing::info!(key = %s3_key, error = %e, "head_object result: object not found, proceeding");
+        }
+    }
 
     // Build S3 metadata
     let mut metadata = HashMap::new();

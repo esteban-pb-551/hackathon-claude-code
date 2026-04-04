@@ -14,6 +14,8 @@ const form = reactive({
   filter: ''
 })
 
+const MAX_FILE_SIZE = 512 * 1024 // 512 KB
+
 const selectedFile = ref(null)
 const fileInputRef = ref(null)
 
@@ -51,6 +53,12 @@ function onFileChange(event) {
   }
   if (!file.name.endsWith('.txt')) {
     showError('file', 'Only .txt files are allowed')
+    selectedFile.value = null
+    event.target.value = ''
+    return
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    showError('file', `File too large (${(file.size / 1024).toFixed(1)} KB). Max: 512 KB`)
     selectedFile.value = null
     event.target.value = ''
     return
@@ -160,7 +168,7 @@ function reset() {
         <Transition name="error-fade">
           <span v-if="errors.file" class="field-error">{{ errors.file }}</span>
         </Transition>
-        <span v-if="!errors.file" class="form-hint">Only .txt files are accepted</span>
+        <span v-if="!errors.file" class="form-hint">Only .txt files up to 512 KB</span>
       </div>
     </div>
 

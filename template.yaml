@@ -124,6 +124,7 @@ Resources:
         Variables:
           VECTOR_BUCKET_NAME: !Select [1, !Split ["/", !GetAtt VectorsBucket.VectorBucketArn]]
           VOYAGE_SECRET_ARN: !Ref VoyageApiKeySecret
+          RUST_LOG: info
       Policies:
         - Statement:
             - Effect: Allow
@@ -175,6 +176,7 @@ Resources:
         Variables:
           SEARCH_RESULTS_TABLE: !Ref SearchResultsTable
           SEARCH_WORKER_ARN: !GetAtt SearchWorkerFunction.Arn
+          RUST_LOG: info
       Policies:
         - Statement:
             - Effect: Allow
@@ -220,6 +222,7 @@ Resources:
           VOYAGE_SECRET_ARN: !Ref VoyageApiKeySecret
           FRIENDLI_SECRET_ARN: !Ref FriendliTokenSecret
           SEARCH_RESULTS_TABLE: !Ref SearchResultsTable
+          RUST_LOG: info
       Policies:
         - Statement:
             - Effect: Allow
@@ -259,11 +262,13 @@ Resources:
       Environment:
         Variables:
           UPLOAD_BUCKET_NAME: !Ref UploadBucket
+          RUST_LOG: info
       Policies:
         - Statement:
             - Effect: Allow
               Action:
                 - s3:PutObject
+                - s3:GetObject
               Resource: !Sub "${UploadBucket.Arn}/*"
       Events:
         UploadPost:

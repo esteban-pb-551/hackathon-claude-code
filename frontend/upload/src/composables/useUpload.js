@@ -60,10 +60,19 @@ export function useUpload() {
         result.value = {
           type: 'success',
           label: 'Uploaded',
-          content: `File uploaded successfully to ${data.key}`,
+          content: 'File uploaded successfully!',
           meta: `${res.status} OK in ${elapsed}s`,
           elapsed,
           request: { indexName, filename, filter: data.filter || 'none' }
+        }
+      } else if (res.status === 409) {
+        result.value = {
+          type: 'error',
+          label: 'Duplicate',
+          content: 'This file has already been uploaded to this index.',
+          meta: '409 Conflict',
+          elapsed,
+          request: { indexName, filename, filter: filter || '' }
         }
       } else {
         result.value = {
