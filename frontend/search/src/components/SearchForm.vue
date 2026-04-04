@@ -1,12 +1,13 @@
 <script setup>
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 
 const props = defineProps({
   isLoading: { type: Boolean, default: false },
-  elapsedDisplay: { type: String, default: '0.0' }
+  elapsedDisplay: { type: String, default: '0.0' },
+  locked: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['search'])
+const emit = defineEmits(['search', 'cancel', 'reset'])
 
 const form = reactive({
   indexName: '',
@@ -14,12 +15,55 @@ const form = reactive({
   filter: ''
 })
 
+const errors = reactive({
+  indexName: '',
+  query: ''
+})
+
+let indexNameTimer = null
+let queryTimer = null
+
+function clearError(field) {
+  errors[field] = ''
+}
+
+function showError(field, message) {
+  errors[field] = message
+  const timer = setTimeout(() => {
+    errors[field] = ''
+  }, 3000)
+  if (field === 'indexName') {
+    clearTimeout(indexNameTimer)
+    indexNameTimer = timer
+  } else {
+    clearTimeout(queryTimer)
+    queryTimer = timer
+  }
+}
+
 function submit() {
   const indexName = form.indexName.trim()
   const query = form.query.trim()
   const filter = form.filter.trim()
-  if (!indexName || !query) return
+
+  let hasError = false
+  if (!indexName) {
+    showError('indexName', 'Index Name is required')
+    hasError = true
+  }
+  if (!query) {
+    showError('query', 'Query is required')
+    hasError = true
+  }
+  if (hasError) return
+
   emit('search', { indexName, query, filter })
+}
+
+function reset() {
+  form.query = ''
+  form.filter = ''
+  emit('reset')
 }
 </script>
 
@@ -34,13 +78,18 @@ function submit() {
           id="indexName"
           v-model="form.indexName"
           class="form-input"
+          :class="{ 'input-error': errors.indexName }"
           type="text"
           placeholder="movies"
-          required
           autocomplete="off"
           spellcheck="false"
+          :disabled="locked || isLoading"
+          @input="clearError('indexName')"
         >
-        <span class="form-hint">S3 prefix used as index name</span>
+        <Transition name="error-fade">
+          <span v-if="errors.indexName" class="field-error">{{ errors.indexName }}</span>
+        </Transition>
+        <span v-if="!errors.indexName" class="form-hint">S3 prefix used as index name</span>
       </div>
 
       <div class="form-group">
@@ -55,6 +104,7 @@ function submit() {
           placeholder="scifi"
           autocomplete="off"
           spellcheck="false"
+          :disabled="locked || isLoading"
         >
         <span class="form-hint">Filter by metadata value</span>
       </div>
@@ -67,40 +117,66 @@ function submit() {
           id="query"
           v-model="form.query"
           class="form-textarea"
+          :class="{ 'input-error': errors.query }"
           placeholder="What are the main themes in the movie?"
           rows="3"
-          required
           spellcheck="false"
+          :disabled="locked || isLoading"
+          @input="clearError('query')"
         />
+        <Transition name="error-fade">
+          <span v-if="errors.query" class="field-error">{{ errors.query }}</span>
+        </Transition>
       </div>
     </div>
 
     <div class="form-actions">
-      <button
-        type="submit"
-        class="btn-search"
-        :disabled="isLoading || !form.indexName.trim() || !form.query.trim()"
-      >
-        <svg
-          class="btn-icon"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
+      <template v-if="locked">
+        <button
+          type="button"
+          class="btn-new"
+          @click="reset"
         >
-          <circle cx="7" cy="7" r="5" />
-          <line x1="11" y1="11" x2="14.5" y2="14.5" />
-        </svg>
-        {{ isLoading ? 'Searching...' : 'Search' }}
-      </button>
+          New Question
+        </button>
+      </template>
 
-      <div v-if="isLoading" class="loading-bar">
-        <div class="progress-track">
-          <div class="progress-fill" />
+      <template v-else>
+        <button
+          type="submit"
+          class="btn-search"
+          :disabled="isLoading"
+        >
+          <svg
+            class="btn-icon"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+          >
+            <circle cx="7" cy="7" r="5" />
+            <line x1="11" y1="11" x2="14.5" y2="14.5" />
+          </svg>
+          {{ isLoading ? 'Searching...' : 'Search' }}
+        </button>
+
+        <button
+          v-if="isLoading"
+          type="button"
+          class="btn-cancel"
+          @click="$emit('cancel')"
+        >
+          Cancel
+        </button>
+
+        <div v-if="isLoading" class="loading-bar">
+          <div class="progress-track">
+            <div class="progress-fill" />
+          </div>
+          <span>{{ elapsedDisplay }}s</span>
         </div>
-        <span>{{ elapsedDisplay }}s</span>
-      </div>
+      </template>
     </div>
   </form>
 </template>
@@ -199,6 +275,35 @@ function submit() {
   margin-top: 2px;
 }
 
+.input-error {
+  border-color: var(--error-text) !important;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+.field-error {
+  font-size: 11px;
+  color: var(--error-text);
+  margin-top: 2px;
+  font-weight: 500;
+}
+
+.error-fade-enter-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.error-fade-leave-active {
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.error-fade-enter-from {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.error-fade-leave-to {
+  opacity: 0;
+}
+
 .form-actions {
   display: flex;
   align-items: center;
@@ -227,6 +332,47 @@ function submit() {
 
 .btn-search:disabled {
   opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-cancel {
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--error-text);
+  border: 1px solid var(--error-border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+
+.btn-cancel:hover {
+  background: var(--error-bg);
+}
+
+.btn-new {
+  padding: 10px 24px;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.btn-new:hover {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.form-input:disabled,
+.form-textarea:disabled {
+  opacity: 0.6;
   cursor: not-allowed;
 }
 

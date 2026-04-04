@@ -1,11 +1,7 @@
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed } from 'vue'
 import { API_URL } from '../config.js'
 
-/**
- * Composable that encapsulates the search API call,
- * loading state, elapsed-time counter, and result handling.
- */
-export function useSearch() {
+export function useUpload() {
   const isLoading = ref(false)
   const elapsedMs = ref(0)
   const result = ref(null)
@@ -32,17 +28,24 @@ export function useSearch() {
     }
   }
 
-  onUnmounted(() => stopTimer())
-
-  async function search(indexName, query, filter) {
-    const body = { index_name: indexName, query }
-    if (filter) body.filter = filter
-
+  async function upload(indexName, filename, filter, fileContent) {
     isLoading.value = true
     result.value = null
     startTimer()
 
     try {
+      // Base64 encode the file content
+      const base64Content = btoa(
+        new Uint8Array(fileContent).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      )
+
+      const body = {
+        index_name: indexName,
+        filename,
+        content: base64Content
+      }
+      if (filter) body.filter = filter
+
       const res = await fetch(API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -53,32 +56,32 @@ export function useSearch() {
       stopTimer()
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(2)
 
-      if (data.error) {
-        result.value = {
-          type: 'error',
-          label: `Error ${res.status}`,
-          content: data.error,
-          meta: `${res.status} response`,
-          elapsed,
-          request: { indexName, query, filter }
-        }
-      } else if (data.response) {
+      if (res.ok) {
         result.value = {
           type: 'success',
-          label: 'Response',
-          content: data.response,
-          meta: `200 OK in ${elapsed}s`,
+          label: 'Uploaded',
+          content: 'File uploaded successfully!',
+          meta: `${res.status} OK in ${elapsed}s`,
           elapsed,
-          request: { indexName, query, filter }
+          request: { indexName, filename, filter: data.filter || 'none' }
+        }
+      } else if (res.status === 409) {
+        result.value = {
+          type: 'error',
+          label: 'Duplicate',
+          content: 'This file has already been uploaded to this index.',
+          meta: '409 Conflict',
+          elapsed,
+          request: { indexName, filename, filter: filter || '' }
         }
       } else {
         result.value = {
           type: 'error',
-          label: 'Unexpected Response',
-          content: JSON.stringify(data, null, 2),
+          label: `Error ${res.status}`,
+          content: data.error || JSON.stringify(data, null, 2),
           meta: `${res.status} response`,
           elapsed,
-          request: { indexName, query, filter }
+          request: { indexName, filename, filter: filter || '' }
         }
       }
     } catch (err) {
@@ -87,17 +90,15 @@ export function useSearch() {
       result.value = {
         type: 'error',
         label: 'Network Error',
-        content:
-          err.message ||
-          'Failed to reach the API. Check the endpoint URL and your network connection.',
+        content: err.message || 'Failed to reach the API.',
         meta: 'Request failed',
         elapsed,
-        request: { indexName, query, filter }
+        request: { indexName, filename, filter: filter || '' }
       }
     } finally {
       isLoading.value = false
     }
   }
 
-  return { isLoading, elapsedDisplay, result, search }
+  return { isLoading, elapsedDisplay, result, upload }
 }

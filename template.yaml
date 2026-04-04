@@ -124,6 +124,7 @@ Resources:
         Variables:
           VECTOR_BUCKET_NAME: !Select [1, !Split ["/", !GetAtt VectorsBucket.VectorBucketArn]]
           VOYAGE_SECRET_ARN: !Ref VoyageApiKeySecret
+          RUST_LOG: info
       Policies:
         - Statement:
             - Effect: Allow
@@ -143,7 +144,22 @@ Resources:
                 - !GetAtt VectorsBucket.VectorBucketArn
                 - !Sub "${VectorsBucket.VectorBucketArn}/*"
 
-  # ---------- SearchS3Vectors Lambda (Rust) ----------
+  # ---------- Search Results Table (DynamoDB) ----------
+  SearchResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: request_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: request_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # ---------- SearchS3Vectors Lambda — API handler (Rust) ----------
   SearchS3VectorsFunction:
     Type: AWS::Serverless::Function
     Metadata:
@@ -152,6 +168,50 @@ Resources:
       Runtime: provided.al2023
       Handler: bootstrap
       CodeUri: lambdas/search-s3-vectors/
+      Timeout: 29
+      MemorySize: 256
+      Architectures:
+        - arm64
+      Environment:
+        Variables:
+          SEARCH_RESULTS_TABLE: !Ref SearchResultsTable
+          SEARCH_WORKER_ARN: !GetAtt SearchWorkerFunction.Arn
+          RUST_LOG: info
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+              Resource: !GetAtt SearchResultsTable.Arn
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: !GetAtt SearchWorkerFunction.Arn
+      Events:
+        SearchPost:
+          Type: HttpApi
+          Properties:
+            Path: /search
+            Method: POST
+            ApiId: !Ref SearchHttpApi
+        SearchPoll:
+          Type: HttpApi
+          Properties:
+            Path: /search/{requestId}
+            Method: GET
+            ApiId: !Ref SearchHttpApi
+
+  # ---------- SearchWorker Lambda — RAG pipeline (Rust) ----------
+  SearchWorkerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      Runtime: provided.al2023
+      Handler: bootstrap
+      CodeUri: lambdas/search-worker/
       Timeout: 300
       MemorySize: 512
       Architectures:
@@ -161,6 +221,8 @@ Resources:
           VECTOR_BUCKET_NAME: !Select [1, !Split ["/", !GetAtt VectorsBucket.VectorBucketArn]]
           VOYAGE_SECRET_ARN: !Ref VoyageApiKeySecret
           FRIENDLI_SECRET_ARN: !Ref FriendliTokenSecret
+          SEARCH_RESULTS_TABLE: !Ref SearchResultsTable
+          RUST_LOG: info
       Policies:
         - Statement:
             - Effect: Allow
@@ -178,11 +240,41 @@ Resources:
               Resource:
                 - !GetAtt VectorsBucket.VectorBucketArn
                 - !Sub "${VectorsBucket.VectorBucketArn}/*"
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt SearchResultsTable.Arn
+
+  # ---------- UploadS3 Lambda (Rust) ----------
+  UploadS3Function:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      Runtime: provided.al2023
+      Handler: bootstrap
+      CodeUri: lambdas/upload-s3/
+      Timeout: 29
+      MemorySize: 256
+      Architectures:
+        - arm64
+      Environment:
+        Variables:
+          UPLOAD_BUCKET_NAME: !Ref UploadBucket
+          RUST_LOG: info
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:GetObject
+              Resource: !Sub "${UploadBucket.Arn}/*"
       Events:
-        SearchApi:
+        UploadPost:
           Type: HttpApi
           Properties:
-            Path: /search
+            Path: /upload
             Method: POST
             ApiId: !Ref SearchHttpApi
 
@@ -195,6 +287,8 @@ Resources:
           - "*"
         AllowMethods:
           - POST
+          - GET
+          - PUT
           - OPTIONS
         AllowHeaders:
           - Content-Type
@@ -227,3 +321,19 @@ Outputs:
   SearchS3VectorsFunctionArn:
     Description: ARN of the SearchS3Vectors Lambda
     Value: !GetAtt SearchS3VectorsFunction.Arn
+
+  SearchWorkerFunctionArn:
+    Description: ARN of the SearchWorker Lambda
+    Value: !GetAtt SearchWorkerFunction.Arn
+
+  SearchResultsTableName:
+    Description: Name of the DynamoDB table for async search results
+    Value: !Ref SearchResultsTable
+
+  UploadS3FunctionArn:
+    Description: ARN of the UploadS3 Lambda
+    Value: !GetAtt UploadS3Function.Arn
+
+  UploadApiUrl:
+    Description: URL of the Upload HTTP API endpoint
+    Value: !Sub "https://${SearchHttpApi}.execute-api.${AWS::Region}.amazonaws.com/upload"
