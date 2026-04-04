@@ -243,6 +243,36 @@ Resources:
                 - dynamodb:UpdateItem
               Resource: !GetAtt SearchResultsTable.Arn
 
+  # ---------- UploadS3 Lambda (Rust) ----------
+  UploadS3Function:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      Runtime: provided.al2023
+      Handler: bootstrap
+      CodeUri: lambdas/upload-s3/
+      Timeout: 29
+      MemorySize: 256
+      Architectures:
+        - arm64
+      Environment:
+        Variables:
+          UPLOAD_BUCKET_NAME: !Ref UploadBucket
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "${UploadBucket.Arn}/*"
+      Events:
+        UploadPost:
+          Type: HttpApi
+          Properties:
+            Path: /upload
+            Method: POST
+            ApiId: !Ref SearchHttpApi
+
   # ---------- Search HTTP API ----------
   SearchHttpApi:
     Type: AWS::Serverless::HttpApi
@@ -253,6 +283,7 @@ Resources:
         AllowMethods:
           - POST
           - GET
+          - PUT
           - OPTIONS
         AllowHeaders:
           - Content-Type
@@ -293,3 +324,11 @@ Outputs:
   SearchResultsTableName:
     Description: Name of the DynamoDB table for async search results
     Value: !Ref SearchResultsTable
+
+  UploadS3FunctionArn:
+    Description: ARN of the UploadS3 Lambda
+    Value: !GetAtt UploadS3Function.Arn
+
+  UploadApiUrl:
+    Description: URL of the Upload HTTP API endpoint
+    Value: !Sub "https://${SearchHttpApi}.execute-api.${AWS::Region}.amazonaws.com/upload"

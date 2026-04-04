@@ -14,7 +14,7 @@ console.info('[app] Vue %s | Build: %s', __VUE_OPTIONS_API__ !== undefined ? '3.
 const { isDark, toggle: toggleTheme } = useTheme()
 const { isLoading, elapsedDisplay, result, search, cancel } = useSearch()
 
-const formLocked = computed(() => !isLoading.value && result.value !== null)
+const formLocked = computed(() => !isLoading.value && result.value !== null && result.value.type === 'success')
 
 function onSearch({ indexName, query, filter }) {
   console.info('[app] Search submitted:', { indexName, query, filter: filter || '(none)' })

@@ -83,6 +83,7 @@ async fn handle_post(event: Request, state: &AppState) -> Result<Response<Body>,
         .table_name(&state.table_name)
         .item("request_id", AttributeValue::S(request_id.clone()))
         .item("status", AttributeValue::S("pending".into()))
+        .item("query", AttributeValue::S(req.query.clone()))
         .item("created_at", AttributeValue::N(created_at.to_string()))
         .item("ttl", AttributeValue::N(ttl.to_string()))
         .send()
